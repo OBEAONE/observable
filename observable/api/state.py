@@ -59,6 +59,12 @@ def _fake_crm_backend() -> dict[str, dict]:
     }
 
 
+def _fake_booking_backend() -> dict[str, dict]:
+    return {
+        "B-1": {"resource": "Meeting Room A", "customer": "Acme Corp", "date": "2026-10-02", "status": "confirmed"},
+    }
+
+
 def build_default_state() -> AppState:
     ca = ReferenceCA(org_name="Observable Demo CA")
     registry = IdentityRegistry(ca)
@@ -98,11 +104,57 @@ def build_default_state() -> AppState:
     def ticket_triage(payload: dict, resource_id) -> dict:
         return {"ticket": resource_id, "priority": "P3", "category": "billing"}
 
+    booking_db = _fake_booking_backend()
+    _booking_seq = {"n": len(booking_db)}
+
+    def booking_read(payload: dict, resource_id) -> dict:
+        record = booking_db.get(resource_id or "", {"error": "not found"})
+        return dict(record)
+
+    def booking_create(payload: dict, resource_id) -> dict:
+        _booking_seq["n"] += 1
+        new_id = resource_id or f"B-{_booking_seq['n']}"
+        booking_db[new_id] = {
+            "resource": payload.get("resource", "unspecified"),
+            "customer": payload.get("customer", "unspecified"),
+            "date": payload.get("date"),
+            "status": "confirmed",
+        }
+        return {"booking_id": new_id, **booking_db[new_id]}
+
+    def booking_cancel(payload: dict, resource_id) -> dict:
+        record = booking_db.get(resource_id or "")
+        if record is None:
+            return {"error": "not found"}
+        record["status"] = "cancelled"
+        return {"booking_id": resource_id, "status": "cancelled"}
+
+    def reporting_generate(payload: dict, resource_id) -> dict:
+        # A read-only rollup over whatever the demo backends currently
+        # hold — nothing here mutates state, matching a real reporting
+        # tool's expected blast radius.
+        return {
+            "report": payload.get("report_name", "activity-summary"),
+            "period": payload.get("period", "last_7_days"),
+            "crm_accounts": len(crm_db),
+            "bookings": len(booking_db),
+            "bookings_confirmed": sum(1 for b in booking_db.values() if b["status"] == "confirmed"),
+        }
+
+    def reporting_export(payload: dict, resource_id) -> dict:
+        fmt = payload.get("format", "csv")
+        return {"export_format": fmt, "rows": len(crm_db) + len(booking_db), "status": "generated"}
+
     guard.register_tool("crm.read", crm_read)
     guard.register_tool("crm.write", crm_write)
     guard.register_tool("crm.delete", crm_delete)
     guard.register_tool("email.send", email_send)
     guard.register_tool("ticket.triage", ticket_triage)
+    guard.register_tool("booking.read", booking_read)
+    guard.register_tool("booking.create", booking_create)
+    guard.register_tool("booking.cancel", booking_cancel)
+    guard.register_tool("reporting.generate", reporting_generate)
+    guard.register_tool("reporting.export", reporting_export)
 
     default_connector = MockConnector()
 

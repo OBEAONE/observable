@@ -134,11 +134,44 @@ def default_bundle() -> PolicyBundle:
         "ticket.triage": ToolDefinition(
             name="ticket.triage", description="Read and categorize support tickets", sensitivity=Sensitivity.LOW
         ),
+        "booking.read": ToolDefinition(
+            name="booking.read", description="Read a booking/reservation record", sensitivity=Sensitivity.LOW
+        ),
+        "booking.create": ToolDefinition(
+            name="booking.create",
+            description="Create a new booking/reservation",
+            sensitivity=Sensitivity.MEDIUM,
+            max_risk_score=0.6,
+        ),
+        "booking.cancel": ToolDefinition(
+            name="booking.cancel",
+            description="Cancel an existing booking/reservation",
+            sensitivity=Sensitivity.HIGH,
+            business_hours_only=True,
+            max_risk_score=0.3,
+        ),
+        "reporting.generate": ToolDefinition(
+            name="reporting.generate",
+            description="Generate a summary report from operational data",
+            sensitivity=Sensitivity.LOW,
+        ),
+        "reporting.export": ToolDefinition(
+            name="reporting.export",
+            description="Export a generated report to an external format/location",
+            sensitivity=Sensitivity.MEDIUM,
+            max_risk_score=0.5,
+        ),
     }
     role_grants = {
         "sales-assistant": RoleGrant(role="sales-assistant", tool_patterns=["crm.read", "email.send"]),
         "crm-admin": RoleGrant(role="crm-admin", tool_patterns=["crm.*"]),
         "support-triage": RoleGrant(role="support-triage", tool_patterns=["ticket.triage", "crm.read"]),
+        "booking-agent": RoleGrant(
+            role="booking-agent", tool_patterns=["booking.read", "booking.create", "booking.cancel"]
+        ),
+        "reporting-analyst": RoleGrant(
+            role="reporting-analyst", tool_patterns=["reporting.*", "crm.read", "booking.read"]
+        ),
     }
     return PolicyBundle(
         version="1.0.0",

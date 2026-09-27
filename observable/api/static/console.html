@@ -159,6 +159,12 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
 }
 
 /* ---------- overview panels ---------- */
+.activity-legend{display:flex; flex-wrap:wrap; gap:16px; padding:10px 16px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted)}
+.activity-legend span{display:inline-flex; align-items:center; gap:6px}
+.activity-legend .hint{margin-left:auto; color:var(--text-faint)}
+.dot-key{width:8px; height:8px; border-radius:50%; display:inline-block}
+.activity-node{transition:opacity .15s}
+.activity-node:hover{opacity:.75}
 .two-col{display:grid; grid-template-columns:1.3fr 1fr; gap:16px}
 @media (max-width:900px){ .two-col{grid-template-columns:1fr} }
 .finding-row{display:flex; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); align-items:flex-start}
@@ -304,6 +310,16 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       </div>
 
       <div class="kpi-row" id="kpiRow"></div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>Agent activity map</h2><span class="meta" id="activityMapMeta"></span></div>
+        <div class="card-body" id="activityMapBody" style="overflow-x:auto"></div>
+        <div class="activity-legend">
+          <span><i class="dot-key" style="background:var(--accent)"></i> allowed calls</span>
+          <span><i class="dot-key" style="background:var(--critical)"></i> includes denied calls</span>
+          <span class="hint">Line thickness = call volume · click an agent to view its PKI identity</span>
+        </div>
+      </div>
 
       <div class="two-col">
         <div class="card">
@@ -478,6 +494,18 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       "a9b8c7d6-5e4f-4a3b-9c2d-1e2f3a4b5c6d":{agent_id:"a9b8c7d6-5e4f-4a3b-9c2d-1e2f3a4b5c6d", known:true, n_intervals:4, interval_mean_seconds:3.1, interval_std_seconds:0.4, tools_seen:["ticket.triage"], distinct_resources_seen:4, recent_decision_count:5, recent_deny_count:1, last_event_at:"2026-09-20T11:40:12+00:00"},
       "c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f":{agent_id:"c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f", known:true, n_intervals:6, interval_mean_seconds:0.31, interval_std_seconds:0.05, tools_seen:["crm.read"], distinct_resources_seen:6, recent_decision_count:7, recent_deny_count:1, last_event_at:"2026-09-20T11:22:40+00:00"}
     },
+    activity:{
+      "6f1e2b3a-71c4-4a9e-9c2f-11a2b3c4d5e6":[
+        {tool:"crm.read", count:9, deny:0, last_at:"2026-09-20T11:58:03+00:00"},
+        {tool:"ticket.triage", count:5, deny:0, last_at:"2026-09-20T11:50:00+00:00"}
+      ],
+      "a9b8c7d6-5e4f-4a3b-9c2d-1e2f3a4b5c6d":[
+        {tool:"ticket.triage", count:4, deny:1, last_at:"2026-09-20T11:40:12+00:00"}
+      ],
+      "c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f":[
+        {tool:"crm.read", count:6, deny:1, last_at:"2026-09-20T11:22:40+00:00"}
+      ]
+    },
     incidents:[
       {incident_id:"observable-c3d4e5f6-4", title:"Observable containment: agent c3d4e5f6... (suspend)", severity:"critical", status:"open", agent_id:"c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f", role:"sales-assistant", triggered_at:"2026-09-20T11:22:41+00:00", trigger_action:"containment:suspend", trigger_reason:"automated containment: risk_score=0.50 >= threshold=0.50; signals=['new_resource_burst(count=5 in 60s)']", recommended_actions:["Review the agent's recent audit trail for the specific actions that led to containment","Review the named signals against the agent's learned baseline to confirm this is not a false positive","Check the Inventory plane for this agent's SaaS-side footprint","Reinstate if cleared, or escalate to revoke_agent() if compromise is confirmed"], related_audit_seqs:[41], closed_at:null, closed_reason:null}
     ]
@@ -499,6 +527,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     shadow: [],
     posture: [],
     detection: {},
+    activity: {},
     incidents: []
   };
 
@@ -529,6 +558,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     state.shadow = EXAMPLE.shadow;
     state.posture = EXAMPLE.posture;
     state.detection = EXAMPLE.detection;
+    state.activity = EXAMPLE.activity;
     state.incidents = EXAMPLE.incidents;
     render();
     setConn("demo", label || "Example data");
@@ -553,6 +583,26 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       return Promise.all(state.agents.map(function(a){
         return apiGet("/detection/" + encodeURIComponent(a.agent_id)).then(function(d){
           state.detection[a.agent_id] = d;
+        }).catch(function(){});
+      }));
+    }).then(function(){
+      // activity map: pull each agent's audit trail and aggregate into
+      // per-tool call counts + deny counts, for the Overview activity
+      // map. Best-effort -- an agent with no audit history yet just
+      // gets no edges, not an error.
+      state.activity = {};
+      return Promise.all(state.agents.map(function(a){
+        return apiGet("/audit/" + encodeURIComponent(a.agent_id)).then(function(entries){
+          var byTool = {};
+          (entries || []).forEach(function(e){
+            if(!e.action || e.action.indexOf("tool:") !== 0){ return; }
+            var tool = e.action.slice(5);
+            if(!byTool[tool]){ byTool[tool] = {tool:tool, count:0, deny:0, last_at:e.timestamp}; }
+            byTool[tool].count += 1;
+            if(e.decision !== "allow"){ byTool[tool].deny += 1; }
+            if(e.timestamp > byTool[tool].last_at){ byTool[tool].last_at = e.timestamp; }
+          });
+          state.activity[a.agent_id] = Object.keys(byTool).map(function(t){ return byTool[t]; });
         }).catch(function(){});
       }));
     }).then(function(){
@@ -582,6 +632,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
 
   function render(){
     renderOverview();
+    renderActivityMap();
     renderAgents();
     renderCompliance();
     renderInventory();
@@ -626,6 +677,101 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     document.getElementById("incidentsOverviewList").innerHTML = openInc.length ? openInc.map(function(i){
       return '<div class="finding-row">' + pill(i.severity) + '<div class="txt"><div class="t1">' + esc(i.title) + '</div><div class="t2 mono">' + esc(shortId(i.agent_id)) + ' · ' + esc(fmtDate(i.triggered_at)) + '</div></div></div>';
     }).join("") : '<div class="finding-row"><div class="txt"><div class="t1">No open incidents</div></div></div>';
+  }
+
+  function renderActivityMap(){
+    var body = document.getElementById("activityMapBody");
+    var meta = document.getElementById("activityMapMeta");
+    var agents = state.agents;
+
+    if(!agents.length){
+      body.innerHTML = '<div class="finding-row"><div class="txt"><div class="t1">No agents enrolled yet.</div><div class="t2">Enroll an agent to see it appear here, linked to the tools it calls.</div></div></div>';
+      meta.textContent = "";
+      return;
+    }
+
+    var activity = state.activity || {};
+    var toolSet = {};
+    var edges = [];
+    agents.forEach(function(a, idx){
+      (activity[a.agent_id] || []).forEach(function(r){
+        toolSet[r.tool] = true;
+        edges.push({agentIdx: idx, tool: r.tool, count: r.count, deny: r.deny || 0, lastAt: r.last_at});
+      });
+    });
+    var tools = Object.keys(toolSet).sort();
+
+    meta.textContent = edges.length
+      ? (edges.length + " link(s) across " + tools.length + " tool(s)")
+      : (state.live ? "No tool activity recorded yet" : "");
+
+    if(!tools.length){
+      body.innerHTML = '<div class="finding-row"><div class="txt"><div class="t1">No tool activity recorded yet.</div><div class="t2">Have an enrolled agent make a call, then refresh -- each allowed or denied call it makes will show up here as a link to that tool.</div></div></div>';
+      return;
+    }
+
+    var rowH = 38, padTop = 24;
+    var leftX = 180, rightX = 560, width = 740;
+    var height = padTop * 2 + Math.max(agents.length, tools.length) * rowH;
+
+    var agentY = {};
+    agents.forEach(function(a, i){ agentY[a.agent_id] = padTop + i * rowH + rowH / 2; });
+    var toolY = {};
+    tools.forEach(function(t, j){ toolY[t] = padTop + j * rowH + rowH / 2; });
+
+    var maxCount = edges.reduce(function(m, e){ return Math.max(m, e.count); }, 1);
+    var parts = [];
+
+    edges.forEach(function(e){
+      var a = agents[e.agentIdx];
+      var y1 = agentY[a.agent_id], y2 = toolY[e.tool];
+      var x1 = leftX, x2 = rightX, mx = (x1 + x2) / 2;
+      var denied = e.deny > 0;
+      var stroke = denied ? "var(--critical)" : "var(--accent)";
+      var w = 1.4 + 3.4 * (e.count / maxCount);
+      var op = denied ? 0.85 : (0.35 + 0.5 * (e.count / maxCount));
+      var title = esc(a.display_name) + " → " + esc(e.tool) + ": " + e.count + " call(s)" +
+        (e.deny ? (", " + e.deny + " denied") : "");
+      parts.push(
+        '<path d="M' + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2 +
+        '" fill="none" stroke="' + stroke + '" stroke-width="' + w.toFixed(2) +
+        '" stroke-opacity="' + op.toFixed(2) + '" stroke-linecap="round"><title>' + title + "</title></path>"
+      );
+    });
+
+    agents.forEach(function(a){
+      var y = agentY[a.agent_id];
+      var dotColor = a.status === "active" ? "var(--ok)" : (a.status === "suspended" || a.status === "revoked" ? "var(--critical)" : "var(--text-faint)");
+      var agentTitle = esc(a.display_name) + " (" + esc(a.role) + ", " + esc(a.status) + ")";
+      parts.push(
+        '<g class="activity-node" data-agent="' + esc(a.agent_id) + '">' +
+        '<circle cx="' + leftX + '" cy="' + y + '" r="5" fill="' + dotColor + '"/>' +
+        '<text x="' + (leftX - 12) + '" y="' + (y + 4) + '" text-anchor="end" font-size="12" fill="var(--text)">' + esc(a.display_name) + "</text>" +
+        "<title>" + agentTitle + "</title>" +
+        "</g>"
+      );
+    });
+
+    tools.forEach(function(t){
+      var y = toolY[t];
+      parts.push(
+        "<g>" +
+        '<circle cx="' + rightX + '" cy="' + y + '" r="5" fill="var(--accent-2)"/>' +
+        '<text x="' + (rightX + 12) + '" y="' + (y + 4) + '" text-anchor="start" font-size="12" fill="var(--text)">' + esc(t) + "</text>" +
+        "</g>"
+      );
+    });
+
+    body.innerHTML =
+      '<svg viewBox="0 0 ' + width + " " + height + '" width="100%" height="' + height + '" style="display:block; min-width:520px">' +
+      parts.join("") + "</svg>";
+
+    body.querySelectorAll(".activity-node").forEach(function(node){
+      node.style.cursor = "pointer";
+      node.addEventListener("click", function(){
+        openIdentityModal(node.getAttribute("data-agent"));
+      });
+    });
   }
 
   function renderAgents(){

@@ -36,7 +36,6 @@ SIEM export, SOAR incident export, export HTTP API).
 python3 demo.py                      # Agent Guard: ARCHITECTURE.md §6
 python3 inventory_demo.py            # Inventory & Posture: ARCHITECTURE.md §7
 python3 detection_demo.py            # Detection plane: ARCHITECTURE.md §8
-python3 intent_demo.py               # Intent-conformance signal: ARCHITECTURE.md §8.5
 python3 compliance_export_demo.py    # Compliance & export: ARCHITECTURE.md §9
 ```
 
@@ -96,40 +95,13 @@ observable/
   inventory/      Blocks 7-10 — SaaS connectors, inventory store,
                   shadow-AI detector, posture findings engine
   detection/      §8 — behavior baseline, anomaly scorer, detection
-                  engine; §8.5 — intent-conformance signal (intent.py)
+                  engine
   compliance/     §9.1 — control framework + report generation
   export/         §9.2-9.3 — CEF/JSON SIEM export, SOAR incident export
 tests/                     pytest suite, one file per block
 demo.py                    Agent Guard end-to-end walkthrough (§6)
 inventory_demo.py          Inventory & Posture end-to-end walkthrough (§7)
 detection_demo.py          Detection plane end-to-end walkthrough (§8)
-intent_demo.py             Intent-conformance signal walkthrough (§8.5)
 compliance_export_demo.py  Compliance & export end-to-end walkthrough (§9)
 ARCHITECTURE.md            Full design document
 ```
-
-## Intent-conformance signal (optional, §8.5)
-
-Off by default. Configure with environment variables:
-
-| Variable | Values | Default |
-|---|---|---|
-| `OBSERVABLE_INTENT_SCORER` | `off`, `mock`, `clm` | `off` |
-| `OBSERVABLE_CLM_URL` | CLM server base URL | `http://127.0.0.1:8700` |
-| `OBSERVABLE_CLM_API_KEY` | bearer token, if the CLM server requires one | none |
-| `OBSERVABLE_CLM_TIMEOUT` | seconds per call | `2.0` |
-| `OBSERVABLE_INTENT_MIN_SENSITIVITY` | `low`, `medium`, `high` | all tools (`mock`), `medium` (`clm`) |
-
-`mock` is a deterministic keyword stand-in for tests and demos. `clm`
-calls a self-hosted CLM server (CLM-v0.1-8B on Qwen3-8B, which needs a
-GPU with roughly 24 GB of memory):
-
-```bash
-pip install contrastive-lm
-vllm serve Qwen/Qwen3-8B --served-model-name qwen3-8b --runner pooling --max-model-len 2048 --port 8090 &
-clm-serve        # serves http://<host>:8700
-```
-
-`GET /admin/detection/intent` shows the active scorer, its thresholds
-and live counters, including scorer failures.
-

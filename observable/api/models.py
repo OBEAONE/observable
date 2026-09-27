@@ -52,7 +52,6 @@ class InvokeResponse(BaseModel):
     redactions: list[str]
     risk_score: float = 0.0
     detection_signals: list[str] = []
-    detection_degraded: list[str] = []
 
 
 class ContainRequest(BaseModel):
@@ -175,7 +174,6 @@ class BaselineSummaryResponse(BaseModel):
     distinct_resources_seen: Optional[int] = None
     recent_decision_count: Optional[int] = None
     recent_deny_count: Optional[int] = None
-    recent_tools: Optional[list[str]] = None
     last_event_at: Optional[str] = None
 
 

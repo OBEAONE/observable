@@ -79,7 +79,6 @@ class GuardResult:
     redactions: list[str] = dataclasses.field(default_factory=list)
     risk_score: float = 0.0
     detection_signals: list[str] = dataclasses.field(default_factory=list)
-    detection_degraded: list[str] = dataclasses.field(default_factory=list)
 
 
 class AgentGuard:
@@ -177,12 +176,7 @@ class AgentGuard:
         assessment: Optional[RiskAssessment] = None
         if self._detection is not None:
             assessment = self._detection.pre_score(
-                agent_id=claims.agent_id,
-                tool=tool_name,
-                resource_id=resource_id,
-                timestamp=now,
-                role=claims.role,
-                purpose=claims.purpose,
+                agent_id=claims.agent_id, tool=tool_name, resource_id=resource_id, timestamp=now
             )
 
         # 2.6. Automated containment: if this agent's live risk score has
@@ -308,10 +302,6 @@ class AgentGuard:
         reason = "authorized"
         if redactions:
             reason += f"; redacted {len(redactions)} sensitive field(s): {', '.join(redactions)}"
-        if assessment and assessment.degraded:
-            # Recorded in the audit trail so a reviewer can tell this call
-            # was scored without one of its detection signals (§8.5).
-            reason += f"; detection degraded: {', '.join(assessment.degraded)}"
 
         entry = self._log(
             agent_id=claims.agent_id,
@@ -332,7 +322,6 @@ class AgentGuard:
             redactions=redactions,
             risk_score=live_risk_score,
             detection_signals=assessment.signals if assessment else [],
-            detection_degraded=assessment.degraded if assessment else [],
         )
 
     # ------------------------------------------------------------------

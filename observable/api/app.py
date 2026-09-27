@@ -290,7 +290,6 @@ def gateway_invoke(
         redactions=result.redactions,
         risk_score=result.risk_score,
         detection_signals=result.detection_signals,
-        detection_degraded=result.detection_degraded,
     )
 
 
@@ -532,15 +531,6 @@ def inventory_posture(state: AppState = Depends(get_state)) -> list[PostureFindi
 @app.get("/detection/{agent_id}", response_model=BaselineSummaryResponse)
 def detection_baseline(agent_id: str, state: AppState = Depends(get_state)) -> BaselineSummaryResponse:
     return BaselineSummaryResponse(**state.detection.baseline_summary(agent_id))
-
-
-@app.get("/admin/detection/intent")
-def detection_intent_status(state: AppState = Depends(get_state)) -> dict:
-    """Which intent scorer is configured (off / mock / clm), its
-    thresholds, and live counters — including scorer failures, so an
-    unreachable model server is visible rather than silently degrading
-    detection (ARCHITECTURE.md §8.5)."""
-    return state.detection.intent_status()
 
 
 @app.post("/admin/detection/threshold")

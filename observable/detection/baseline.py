@@ -31,7 +31,6 @@ from typing import Optional
 # agent has been active. Generously covers both the resource-burst and
 # deny-rate windows the scorer uses (each well under an hour).
 _HISTORY_RETENTION = dt.timedelta(hours=1)
-_RECENT_TOOLS_MAX = 10
 
 
 @dataclasses.dataclass
@@ -51,14 +50,6 @@ class AgentBehaviorBaseline:
     )
     # (timestamp, decision) for every event, "allow" | "deny" | "error".
     recent_decisions: deque[tuple[dt.datetime, str]] = dataclasses.field(default_factory=deque)
-    # (timestamp, tool) for *allowed* calls only, most recent last — the
-    # short action history the intent-conformance signal (§8.5) reads to
-    # judge whether the next call fits the agent's purpose. Denied
-    # attempts never happened from the tool's point of view, so they are
-    # not part of the sequence.
-    recent_tools: deque[tuple[dt.datetime, str]] = dataclasses.field(
-        default_factory=lambda: deque(maxlen=_RECENT_TOOLS_MAX)
-    )
 
     @property
     def interval_mean(self) -> float:
@@ -96,8 +87,6 @@ class AgentBehaviorBaseline:
             self.resources_seen.add(resource_id)
 
         self.recent_decisions.append((timestamp, decision))
-        if decision == "allow":
-            self.recent_tools.append((timestamp, tool))
         self._prune(timestamp)
 
     def _update_welford(self, interval: float) -> None:
@@ -113,5 +102,3 @@ class AgentBehaviorBaseline:
             self.new_resource_events.popleft()
         while self.recent_decisions and self.recent_decisions[0][0] < cutoff:
             self.recent_decisions.popleft()
-        while self.recent_tools and self.recent_tools[0][0] < cutoff:
-            self.recent_tools.popleft()

@@ -9,16 +9,19 @@ policy-admins publish it — the rest of the wiring is unchanged.
 from __future__ import annotations
 
 import dataclasses
+import os
+from typing import Optional
 
 from observable.api.pop import NonceCache
 from observable.detection.engine import DetectionEngine
+from observable.detection.intent import CLMIntentScorer, IntentChecker, MockIntentScorer
 from observable.guard.gateway import AgentGuard
 from observable.identity.registry import IdentityRegistry
 from observable.inventory.connector import SaaSConnector
 from observable.inventory.mock_connector import MockConnector
 from observable.inventory.store import InventoryStore
 from observable.pki.reference_ca import ReferenceCA
-from observable.policy.bundle import default_bundle
+from observable.policy.bundle import Sensitivity, default_bundle
 from observable.policy.engine import PolicyEngine
 from observable.tokens.service import TokenService
 
@@ -65,12 +68,50 @@ def _fake_booking_backend() -> dict[str, dict]:
     }
 
 
+def build_intent_checker(policy_engine: PolicyEngine, env=None) -> Optional[IntentChecker]:
+    """Intent-conformance signal (§8.5), configured from the environment:
+
+    * ``OBSERVABLE_INTENT_SCORER`` — ``off`` (default), ``mock`` or ``clm``
+    * ``OBSERVABLE_CLM_URL`` — CLM server base URL (default http://127.0.0.1:8700)
+    * ``OBSERVABLE_CLM_API_KEY`` — bearer token if the CLM server requires one
+    * ``OBSERVABLE_CLM_TIMEOUT`` — seconds per call (default 2.0)
+    * ``OBSERVABLE_INTENT_MIN_SENSITIVITY`` — ``low``/``medium``/``high``;
+      only tools at or above it are checked (default: all for ``mock``,
+      ``medium`` for ``clm`` to keep model calls off low-risk reads)
+
+    Off by default: turning on an ML-derived signal changes how requests
+    are scored, so it is an explicit operator choice, like the
+    auto-containment threshold."""
+    env = os.environ if env is None else env
+    kind = (env.get("OBSERVABLE_INTENT_SCORER") or "off").strip().lower()
+    if kind in ("", "off", "none"):
+        return None
+    min_sens_raw = (env.get("OBSERVABLE_INTENT_MIN_SENSITIVITY") or "").strip().lower()
+    if kind == "mock":
+        scorer = MockIntentScorer()
+        default_min = None
+    elif kind == "clm":
+        scorer = CLMIntentScorer(
+            env.get("OBSERVABLE_CLM_URL") or "http://127.0.0.1:8700",
+            api_key=env.get("OBSERVABLE_CLM_API_KEY") or None,
+            timeout=float(env.get("OBSERVABLE_CLM_TIMEOUT") or 2.0),
+        )
+        default_min = Sensitivity.MEDIUM
+    else:
+        raise ValueError(f"OBSERVABLE_INTENT_SCORER must be off, mock or clm, not {kind!r}")
+    min_sensitivity = Sensitivity(min_sens_raw) if min_sens_raw else default_min
+    return IntentChecker(scorer, policy_engine, min_sensitivity=min_sensitivity)
+
+
 def build_default_state() -> AppState:
     ca = ReferenceCA(org_name="Observable Demo CA")
     registry = IdentityRegistry(ca)
     policy_engine = PolicyEngine(ca=ca, bundle=default_bundle())
     token_service = TokenService(ca=ca, registry=registry, scope_authorizer=policy_engine)
-    detection = DetectionEngine(sensitivity_lookup=policy_engine)
+    detection = DetectionEngine(
+        sensitivity_lookup=policy_engine,
+        intent_checker=build_intent_checker(policy_engine),
+    )
     guard = AgentGuard(
         registry=registry,
         token_service=token_service,

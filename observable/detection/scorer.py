@@ -16,6 +16,12 @@ which is what the guide's Foundation/Enterprise tiers call for
 ("threshold-based alerts", "statistical anomaly detection with tunable
 sensitivity") and what stays auditable — every risk_score this module
 produces comes with the exact reasons that produced it.
+
+A fifth, optional signal — ``intent_mismatch`` (``observable.detection.
+intent``, ARCHITECTURE.md §8.5) — is model-derived and needs an external
+scorer, so it is computed by the Detection Engine and passed in through
+``score_event(extra_signals=...)``; it is combined by the same noisy-OR
+and carries the same kind of named, readable label.
 """
 from __future__ import annotations
 
@@ -58,6 +64,9 @@ class RiskAssessment:
     risk_score: float
     signals: list[str]
     signal_scores: dict[str, float]
+    # Signal sources that could not be evaluated for this event (e.g. the
+    # intent scorer was unreachable, §8.5). Empty in normal operation.
+    degraded: list[str] = dataclasses.field(default_factory=list)
 
 
 def _score_burst_rate(baseline: AgentBehaviorBaseline, timestamp: dt.datetime) -> tuple[float, Optional[str]]:
@@ -129,10 +138,17 @@ def score_event(
     resource_id: Optional[str],
     timestamp: dt.datetime,
     sensitivity_lookup: Optional[SensitivityLookup] = None,
+    extra_signals: Optional[list[tuple[float, Optional[str]]]] = None,
+    degraded: Optional[list[str]] = None,
 ) -> RiskAssessment:
     """Score a hypothetical next event against ``baseline`` without
     mutating it. Call ``baseline.record_event(...)`` separately, after
-    the event's outcome is known, to have future scoring reflect it."""
+    the event's outcome is known, to have future scoring reflect it.
+
+    ``extra_signals`` are (score, label) pairs computed outside this
+    module — currently the intent-conformance signal (§8.5), which needs
+    an external scorer and so cannot live in these pure functions. They
+    are combined by the same noisy-OR as the four statistical signals."""
     signal_scores: dict[str, float] = {}
     signals: list[str] = []
 
@@ -141,6 +157,7 @@ def score_event(
         _score_new_tool(baseline, tool, sensitivity_lookup),
         _score_resource_burst(baseline, resource_id, timestamp),
         _score_deny_rate(baseline, timestamp),
+        *(extra_signals or []),
     ):
         if label is not None and score > 0.0:
             signal_scores[label] = score
@@ -151,4 +168,9 @@ def score_event(
         combined *= 1.0 - score
     risk_score = 1.0 - combined
 
-    return RiskAssessment(risk_score=risk_score, signals=signals, signal_scores=signal_scores)
+    return RiskAssessment(
+        risk_score=risk_score,
+        signals=signals,
+        signal_scores=signal_scores,
+        degraded=list(degraded or []),
+    )

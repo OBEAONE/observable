@@ -79,6 +79,7 @@ class GuardResult:
     redactions: list[str] = dataclasses.field(default_factory=list)
     risk_score: float = 0.0
     detection_signals: list[str] = dataclasses.field(default_factory=list)
+    detection_degraded: bool = False
 
 
 class AgentGuard:
@@ -176,7 +177,12 @@ class AgentGuard:
         assessment: Optional[RiskAssessment] = None
         if self._detection is not None:
             assessment = self._detection.pre_score(
-                agent_id=claims.agent_id, tool=tool_name, resource_id=resource_id, timestamp=now
+                agent_id=claims.agent_id,
+                tool=tool_name,
+                resource_id=resource_id,
+                timestamp=now,
+                role=claims.role,
+                purpose=claims.purpose,
             )
 
         # 2.6. Automated containment: if this agent's live risk score has
@@ -256,6 +262,8 @@ class AgentGuard:
             deny_reason = decision.reason
             if assessment and assessment.signals:
                 deny_reason += f"; detection signals: {', '.join(assessment.signals)}"
+            if assessment and assessment.detection_degraded:
+                deny_reason += f"; {assessment.degraded_reason}"
             entry = self._log(
                 agent_id=claims.agent_id,
                 role=claims.role,
@@ -302,6 +310,8 @@ class AgentGuard:
         reason = "authorized"
         if redactions:
             reason += f"; redacted {len(redactions)} sensitive field(s): {', '.join(redactions)}"
+        if assessment and assessment.detection_degraded:
+            reason += f"; {assessment.degraded_reason}"
 
         entry = self._log(
             agent_id=claims.agent_id,
@@ -322,6 +332,7 @@ class AgentGuard:
             redactions=redactions,
             risk_score=live_risk_score,
             detection_signals=assessment.signals if assessment else [],
+            detection_degraded=bool(assessment.detection_degraded) if assessment else False,
         )
 
     # ------------------------------------------------------------------

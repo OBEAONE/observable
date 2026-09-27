@@ -34,9 +34,11 @@ v1 builds the **Agent Guard core**:
    policy decision + input sanitization + tamper-evident audit log +
    automated containment (suspend/quarantine/revoke).
 
-Not in v1 (flagged for v2, see §7): behavioral baselining / anomaly
-detection, SIEM streaming, sandboxed execution runtime, hardware attestation,
-full multi-agent tracing, output semantic analysis.
+Not in v1 (flagged for v2, see §7): SIEM streaming, sandboxed execution
+runtime, hardware attestation, full multi-agent tracing, output semantic
+analysis. (Behavioral baselining / anomaly detection was flagged here in
+the original scope note but was delivered in v1.2, §8 — this line is kept
+accurate rather than left to imply it's still missing.)
 
 ---
 
@@ -186,13 +188,15 @@ Modeled on RFC 7523 (JWT bearer) + RFC 7800/8705 (PoP / mTLS-bound tokens).
 | Input sanitization | Foundation/Enterprise | Guard validates request shape/length before forwarding; pattern-based injection filtering at Enterprise |
 | Output filtering | Foundation | Guard scans tool responses for credential/PII patterns before returning to the agent |
 | Automated containment | Enterprise | Guard can auto-suspend an agent's certificate and revoke all outstanding tokens (`respond.contain_agent()`) on a policy-defined trigger; decision to escalate stays human, per the guide's "automate the bookkeeping, not the decisions" rule |
+| Behavioral analysis with contextual awareness | Advanced (partial, v1.4) | Optional `intent_mismatch` signal (§8.5): a self-hosted CLM model judges whether each tool call fits the agent's declared purpose; capped, fail-open, off by default |
 | Version-controlled / signed policy | Enterprise | Policy bundles are JSON, hash-referenced, and (optionally) signed by an authorized policy-admin cert before the engine will load them |
 
 Rows intentionally left for v2 (not built here): sandboxed execution,
 confidential computing, OpenTelemetry distributed tracing,
 spotlighting/constitutional-classifier input validation. Statistical
 anomaly detection is delivered in §8 (v1.2) and SIEM/SOAR export in §9
-(v1.3); true ML behavioral models remain deferred (§8.4).
+(v1.3). One model-derived signal, intent conformance, is delivered in
+§8.5 (v1.4); full ML behavioral models remain deferred (§8.6).
 
 ---
 
@@ -413,7 +417,149 @@ Cross-agent/cross-tenant anomaly correlation, geo/IP-based signals
 ("impossible travel" — no location data is available in this reference
 deployment), and true ML behavioral models (the guide's Advanced tier)
 are deferred. The four signals here are the cheap, explainable floor a
-mature program should have before reaching for any of those.
+mature program should have before reaching for any of those. v1.4 adds
+one optional model-derived signal on top of that floor, not in place of
+it (§8.5).
+
+### 8.5 Intent-conformance signal (v1.4)
+
+The four signals in §8.2 see *how* an agent behaves — its pace, what
+is new to it, how often it is denied — but not *whether an action makes
+sense for what the agent is supposed to be doing*. That blind spot is
+where the guide's hardest threats live: tool chaining (a CRM read
+followed by an external send), confused-deputy relays, indirect prompt
+injection. In each of them every call is authorized and statistically
+unremarkable; only its fit with the agent's purpose is wrong.
+
+v1.4 adds one optional fifth signal, `intent_mismatch`
+(`observable/detection/intent.py`). Before each decision, it asks one
+question: *given this agent's role, its declared purpose
+(`req_ctx.purpose`, signed into its token at mint, §4.2) and its recent
+allowed tool calls, is calling this tool consistent with that purpose?*
+The answer is a probability `p_consistent`.
+
+**Scoring.** If `p_consistent` ≥ 0.5 the signal does not fire. Below
+that, it contributes
+
+`risk = 0.5 × (0.5 − p_consistent) / 0.5`
+
+to the same noisy-OR as the statistical signals, so its contribution is
+capped at 0.5. The label is readable in the audit trail like the others:
+`intent_mismatch(tool='reporting.export', p_consistent=0.10,
+purpose='weekly summary of booking activity', scorer=clm)`.
+
+**Worked example (`intent_demo.py`).** A `reporting-analyst` token
+declares the purpose "weekly summary of booking activity". Reading
+bookings and generating the summary pass. A first call to
+`reporting.export` scores `new_tool` = 0.25 statistically, under that
+tool's ABAC ceiling (`max_risk_score` 0.5), so the statistical plane
+alone would allow it. With `intent_mismatch` = 0.40 the combined score
+is 0.55, and the existing ceiling denies it. No new policy was needed:
+the signal only raised the live `risk_score` that ABAC already reads.
+
+#### Design principles
+
+- **Pluggable scorer**, same pattern as `CertificateAuthority` (§2) and
+  `SaaSConnector` (§7.3). `IntentScorer` is the interface; nothing above
+  it changes when an implementation is swapped.
+  - `MockIntentScorer` — deterministic keyword overlap between the
+    purpose and the tool's name/description. No semantic understanding;
+    it exists so the full path runs in tests and demos without a GPU.
+    Never for production.
+  - `CLMIntentScorer` — adapter for a self-hosted Contrastive Language
+    Model server (`clm-serve`, CLM-v0.1-8B on a frozen Qwen3-8B
+    encoder, Apache 2.0). It calls `POST /v1/systemone` with one yes/no
+    question and reads back the probability. It uses a yes/no question
+    rather than CLM's ranking endpoint on purpose: ranking returns
+    probabilities *relative to the candidate set*, which would penalise
+    every legitimate step of a multi-tool workflow that isn't the single
+    "best" next move. The adapter depends only on `httpx`; no torch or
+    CLM package in the Observable process.
+- **What the scorer sees is deliberately narrow:** role, declared
+  purpose, the last 5 allowed tool calls, and the requested tool's name
+  and registered description. Never the request payload. Payload-level
+  judgments (injection, leakage) are separate concerns (§8.6).
+- **A signal, never a control.** The 0.5 cap means this signal alone
+  cannot deny a tool whose ceiling is above 0.5, nor trip an
+  auto-containment threshold set above 0.5. It can only push an
+  already-suspicious request over a line an operator drew. Deny-by-
+  default policy, PoP tokens and scopes are untouched. Under the guide's
+  "impossible vs tedious" test a probabilistic scorer is friction, so
+  it is placed where friction is useful: adding evidence, not
+  replacing barriers.
+- **Fail-open, but loudly.** If the scorer times out or errors, the
+  request is scored without this signal and the hard controls still
+  apply. The outage is never silent: it appears as a `degraded` note on
+  the assessment, in `GuardResult.detection_degraded` and the invoke
+  response, in the audit entry's reason ("detection degraded: …"), and
+  as failure counters in `GET /admin/detection/intent`.
+- **Off the hot path where it doesn't matter.** A per-tool sensitivity
+  floor (`OBSERVABLE_INTENT_MIN_SENSITIVITY`) limits model calls to
+  tools at or above it. The `clm` default is `medium`, so low-risk
+  reads never wait on a model. The scorer runs outside the Detection
+  Engine lock, so a slow model never serializes other agents' scoring.
+  CLM caches action-side embeddings server-side; the registered tool
+  descriptions are a small fixed set, so they stay cached.
+- **Off by default; turning it on is an operator decision**, like the
+  auto-containment threshold (§8.1): `OBSERVABLE_INTENT_SCORER=off |
+  mock | clm`. Adding an ML-derived input to authorization should never
+  happen implicitly.
+- **Explainability, stated honestly.** §8.1 promises every `risk_score`
+  comes with the named signals that produced it. That holds here: the
+  signal is named, its probability and the purpose it was judged
+  against are logged. What is *not* explainable is why the model
+  produced that probability. That is why the signal is capped, labelled
+  with its scorer, and the only model-derived signal in the plane.
+
+#### Component map addition
+
+```
+   Agent Guard ── pre_score(agent, tool, role, purpose) ──▶ Detection Engine
+                                                               │
+                         recent allowed tools (baseline) ──────┤
+                                                               ▼
+                                                        IntentChecker
+                                          (skip rules, cap, degrade, stats)
+                                                               │ IntentScorer
+                                         ┌─────────────────────┴───────────────┐
+                                         ▼                                     ▼
+                                 MockIntentScorer                      CLMIntentScorer
+                                 (dev / demo)                    HTTP ─▶ clm-serve :8700
+                                                                        (self-hosted GPU,
+                                                                         Qwen3-8B + CLM heads)
+```
+
+#### Deployment
+
+The CLM server runs outside Observable, on a GPU host the customer
+controls (Qwen3-8B needs roughly 24 GB of GPU memory). Following the
+guide's supply-chain phase, it is self-hosted rather than called as a
+third-party API, and its weights (the ~75 MB CLM heads and the Qwen3-8B
+encoder) should be recorded in an AI-BOM and pinned by hash. Observable
+reaches it with `OBSERVABLE_CLM_URL` and, if configured,
+`OBSERVABLE_CLM_API_KEY`.
+
+### 8.6 What v1.4 does *not* do
+
+- **The declared purpose is chosen by the agent at token mint.** A
+  compromised agent can declare a purpose that fits its malicious
+  action. The signal still catches drift within a token's lifetime
+  (a purpose fixed at mint, actions that stray from it), which is the
+  prompt-injection case. Binding purposes per role or per enrollment,
+  set by an operator rather than the agent, is the next step.
+- **No payload analysis.** CLM could also serve as a second-layer input
+  classifier ("does this tool response contain instructions addressed to
+  an agent?") and as output semantic analysis. Both need CLM heads
+  fine-tuned on labelled adversarial data before they can be trusted,
+  and are deferred.
+- **Zero-shot only.** The production adapter uses the base CLM-v0.1-8B
+  checkpoint. Fine-tuning its heads on Observable's own labelled
+  audit history (cheap: only the projection heads train) is expected to
+  be needed before this signal is weighted more heavily.
+- **Not validated against a live model in this repository.** The
+  adapter's HTTP contract is tested against a mocked server; accuracy
+  and latency must be measured on the customer's GPU host before
+  enabling `clm` in production.
 
 ---
 
@@ -512,6 +658,98 @@ fresh on every call from live state.
 
 ---
 
+## 9.5 NIST AI RMF alignment: a second lens + Impact Register (v1.5)
+
+§9.1's `DEFAULT_CONTROLS` map one-to-one to this document's own §5
+table — a builder's view of the Zero Trust for AI Agents guide. NIST AI
+RMF 1.0 asks a related but distinct question set (GOVERN/MAP/MEASURE/
+MANAGE), and rather than force one control list to answer both, v1.5
+adds a second, independent control set, `NIST_AI_RMF_CONTROLS`
+(`observable/compliance/nist_ai_rmf.py`), over the *same* running
+instance and the *same* `ComplianceContext` (§9.1) — plus one new piece
+that MAP 5 specifically calls for and nothing before v1.5 provided: an
+**Impact Register**.
+
+### Impact Register (MAP 5)
+
+`observable/compliance/impact_register.py` is a small, queryable store
+of characterized impacts: a title, category (privacy / fairness /
+security / safety / third-party / transparency), the affected parties,
+a severity and likelihood, a status (`open` / `mitigated` / `accepted`),
+and — when applicable — the mitigation actually in place. It is
+in-memory, seeded at startup, same persistence posture as the
+Inventory Store (§7) and the audit chain in this reference deployment.
+
+It is seeded, not left empty, with impacts identified while doing this
+alignment work — and deliberately including impacts of **Observable's
+own** detection/intent-conformance components, not only the agents
+Observable monitors. The Detection Engine (§8) and the intent-
+conformance signal (§8.5) are themselves statistical/model-derived
+components feeding an authorization boundary — "AI systems" under the
+guide's own definition — and MAP 5 applies to them reflexively. The
+seeded entries: a false positive from the Detection Engine blocking
+legitimate agent work (mitigated: signals are capped and explainable,
+every containment is a reviewable SOAR incident); possible bias or
+blind spots in the intent-conformance CLM scorer (left **open** —
+honestly, since §8.6 already documents it as zero-shot and unvalidated
+against a live model); Observable's own detection plane being an AI
+system under the guide's definition, stated explicitly rather than left
+implicit (mitigated by this register and this compliance mode
+existing); and a downstream SaaS tenant not being notified when one of
+its connected agents is auto-contained (left **open** — a real gap).
+
+`GET /compliance/impact-register` lists the register; `POST
+/compliance/impact-register` adds an entry; `POST
+/compliance/impact-register/{entry_id}/status` updates one's status
+and mitigation. All three are plain CRUD over an in-memory store — no
+new architecture, matching the "small, explicit, auditable" posture of
+every other plane here.
+
+### NIST AI RMF compliance-report mode
+
+`GET /compliance/report?framework=nist-ai-rmf` runs the same live
+checks NIST AI RMF actually asks for, reusing the exact registry,
+policy engine, audit chain, inventory, and detection engine the
+existing `?framework=zta` (default, unchanged) report reads — plus the
+Impact Register. A representative slice, not full RMF coverage:
+
+| Subcategory | What it checks |
+|---|---|
+| GOVERN 1.1 | Policy bundle is version-hash-referenced and signed |
+| GOVERN 1.5 | Audit chain integrity holds; both report modes are regenerable live |
+| MAP 1.1 | Registered tools carry a documented description (also what §8.5 judges intent against) |
+| MAP 5.1 | Impact Register: any impact characterized; none left `open` and unmitigated at high/critical severity |
+| MAP 5.2 | Third-party impacts: shadow-AI/posture findings (§7) plus Impact Register entries tagged `third_party` |
+| MEASURE 2.1 | Structural: every plane ships tests plus a scripted demo walkthrough |
+| MEASURE 2.6 | Honest partial whenever the intent-conformance signal is armed: capped and explainable, but explicitly zero-shot/unvalidated (§8.6) |
+| MEASURE 3.3 | **Deliberate FAIL**: no end-user/agent-operator feedback or appeal channel exists yet in this reference deployment |
+| MANAGE 1.3 | Whether an auto-containment threshold is actually configured, not just available |
+| MANAGE 4.1 | Post-deployment monitoring: audit volume, live per-agent baselines, live reports |
+
+MEASURE 3.3 is the control worth calling out by name: it always reports
+`fail` in this reference deployment, on purpose. A compliance mode that
+never shows red is not one an auditor should trust, and NIST AI RMF
+frames risk management as continuous rather than a one-time
+attestation — this mode is built to actually change as gaps like this
+one get closed, not to attest that none exist.
+
+`nist_compliance_demo.py` walks all of this end-to-end: the seeded
+register, adding and resolving an entry, the NIST report showing a real
+mix of pass/partial/fail, and the original `?framework=zta` report
+still working unchanged over the same instance.
+
+### What v1.5 does *not* do
+
+No feedback/appeal channel itself (MEASURE 3.3 names the gap; closing
+it is future work, not this change). No mapping to the full NIST AI RMF
+subcategory list — the ten above are the ones this specific running
+instance can meaningfully probe live, in the same spirit as §9.1's
+"fixed, explicit list beats a configurable rules DSL" choice. No
+durable persistence for the Impact Register (re-seeded on restart, like
+every other in-memory store in this reference deployment).
+
+---
+
 ## 10. Directory layout (code delivered with this document)
 
 ```
@@ -527,12 +765,17 @@ observable/
   client/         Block 6 — Agent-side SDK
   inventory/      Blocks 7-10 — SaaS connectors, inventory store,
                   shadow-AI detector, posture findings engine
-  detection/      §8 — behavior baseline, anomaly scorer, detection engine
-  compliance/     §9.1 — control framework + report generation
+  detection/      §8 — behavior baseline, anomaly scorer, detection engine;
+                  §8.5 — intent-conformance signal + scorers (intent.py)
+  compliance/     §9.1 — control framework + report generation;
+                  §9.5 — NIST AI RMF control set + Impact Register
+                  (nist_ai_rmf.py, impact_register.py)
   export/         §9.2-9.3 — CEF/JSON SIEM export, SOAR incident export
   tests/          pytest suite, one file per block
   demo.py                    Scripted walkthrough of §6 (Agent Guard)
   inventory_demo.py          Scripted walkthrough of §7 (Inventory & Posture)
   detection_demo.py          Scripted walkthrough of §8 (Detection plane)
+  intent_demo.py             Scripted walkthrough of §8.5 (Intent signal)
   compliance_export_demo.py  Scripted walkthrough of §9 (Compliance & export)
+  nist_compliance_demo.py    Scripted walkthrough of §9.5 (NIST AI RMF + Impact Register)
 ```

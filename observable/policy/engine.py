@@ -227,6 +227,15 @@ class PolicyEngine:
         tool = self._bundle.tools.get(tool_name)
         return tool.sensitivity if tool else None
 
+    def tool_description(self, tool_name: str) -> Optional[str]:
+        """Registered description for a tool, read by the Detection
+        Engine's intent-conformance signal (§8.5) — the same registry
+        entry that already backs ``tool_sensitivity``, so a tool's
+        description used to judge intent is always the one an operator
+        actually registered, never a copy that can drift."""
+        tool = self._bundle.tools.get(tool_name)
+        return tool.description if tool else None
+
     def registered_tools(self) -> dict:
         """Read-only view of the currently loaded bundle's tool
         registry, keyed by tool name. Used by the compliance framework

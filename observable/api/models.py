@@ -52,6 +52,7 @@ class InvokeResponse(BaseModel):
     redactions: list[str]
     risk_score: float = 0.0
     detection_signals: list[str] = []
+    detection_degraded: bool = False
 
 
 class ContainRequest(BaseModel):
@@ -164,6 +165,15 @@ class DetectionThresholdRequest(BaseModel):
     threshold: Optional[float] = None
 
 
+class IntentStatusResponse(BaseModel):
+    mode: str
+    enabled: bool
+    min_sensitivity: str
+    calls: int
+    failures: int
+    last_error: Optional[str] = None
+
+
 class BaselineSummaryResponse(BaseModel):
     agent_id: str
     known: bool
@@ -187,10 +197,48 @@ class ControlResultResponse(BaseModel):
 
 
 class ComplianceReportResponse(BaseModel):
+    framework: str = "zta"
     generated_at: str
     overall_status: str
     counts: dict[str, int]
     results: list[ControlResultResponse]
+
+
+class ImpactEntryRequest(BaseModel):
+    title: str
+    category: str = Field(description="privacy | fairness | security | safety | third_party | transparency")
+    affected_parties: list[str]
+    description: str
+    severity: str = Field(description="low | medium | high | critical")
+    likelihood: str = Field(description="rare | possible | likely")
+    mitigation: Optional[str] = None
+    related_component: Optional[str] = None
+    status: str = Field(default="open", description="open | mitigated | accepted")
+
+
+class ImpactStatusUpdateRequest(BaseModel):
+    status: str = Field(description="open | mitigated | accepted")
+    mitigation: Optional[str] = None
+
+
+class ImpactEntryResponse(BaseModel):
+    entry_id: str
+    title: str
+    category: str
+    affected_parties: list[str]
+    description: str
+    severity: str
+    likelihood: str
+    status: str
+    mitigation: Optional[str] = None
+    related_component: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ImpactRegisterResponse(BaseModel):
+    counts: dict[str, int]
+    entries: list[ImpactEntryResponse]
 
 
 class SoarIncidentResponse(BaseModel):

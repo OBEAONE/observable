@@ -15,15 +15,29 @@ import threading
 from typing import Optional
 
 from observable.detection.baseline import AgentBehaviorBaseline
+from observable.detection.intent import IntentChecker
 from observable.detection.scorer import RiskAssessment, SensitivityLookup, score_event
 from observable.guard.audit import AuditChain
 
 
 class DetectionEngine:
-    def __init__(self, *, sensitivity_lookup: Optional[SensitivityLookup] = None) -> None:
+    def __init__(
+        self,
+        *,
+        sensitivity_lookup: Optional[SensitivityLookup] = None,
+        intent_checker: Optional[IntentChecker] = None,
+    ) -> None:
         self._sensitivity_lookup = sensitivity_lookup
+        self._intent_checker = intent_checker
         self._lock = threading.RLock()
         self._baselines: dict[str, AgentBehaviorBaseline] = {}
+
+    @property
+    def intent_checker(self) -> Optional[IntentChecker]:
+        """Read-only access for the API layer (`GET
+        /admin/detection/intent`) — the checker owns its own failure
+        counters and mode, this engine just holds a reference."""
+        return self._intent_checker
 
     def _baseline_for(self, agent_id: str) -> AgentBehaviorBaseline:
         with self._lock:
@@ -34,10 +48,21 @@ class DetectionEngine:
             return baseline
 
     def pre_score(
-        self, *, agent_id: str, tool: str, resource_id: Optional[str], timestamp: dt.datetime
+        self,
+        *,
+        agent_id: str,
+        tool: str,
+        resource_id: Optional[str],
+        timestamp: dt.datetime,
+        role: Optional[str] = None,
+        purpose: Optional[str] = None,
     ) -> RiskAssessment:
         """Read-only: how anomalous would this event be against the
-        agent's current baseline? Does not learn from it."""
+        agent's current baseline? Does not learn from it.
+
+        ``role``/``purpose`` (from the verified token's claims, §4.2)
+        feed the optional intent-conformance signal (§8.5) alongside
+        the four statistical signals; omitted, scoring is unchanged."""
         with self._lock:
             baseline = self._baseline_for(agent_id)
             return score_event(
@@ -46,6 +71,9 @@ class DetectionEngine:
                 resource_id=resource_id,
                 timestamp=timestamp,
                 sensitivity_lookup=self._sensitivity_lookup,
+                intent_checker=self._intent_checker,
+                role=role,
+                purpose=purpose,
             )
 
     def record_event(

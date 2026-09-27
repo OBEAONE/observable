@@ -47,6 +47,8 @@ from observable.tokens.service import DEFAULT_TOKEN_TTL
 
 if TYPE_CHECKING:  # pragma: no cover - import-cycle avoidance only
     from observable.guard.gateway import AgentGuard
+    from observable.compliance.impact_register import ImpactRegister
+    from observable.detection.engine import DetectionEngine
 
 
 class ControlStatus(str, enum.Enum):
@@ -66,7 +68,12 @@ class GuideTier(str, enum.Enum):
 class ControlResult:
     control_id: str
     title: str
-    guide_tier: GuideTier
+    # A ZTA guide tier (GuideTier) for the default control set, or a
+    # plain string category label (e.g. "MAP 5.1") for another mapped
+    # framework such as NIST AI RMF (§9.5) — both a Control and its
+    # ControlResult carry whichever the framework uses, since it is
+    # only ever rendered as a label, never branched on by type.
+    guide_tier: "GuideTier | str"
     status: ControlStatus
     summary: str
     evidence: list[str] = dataclasses.field(default_factory=list)
@@ -85,6 +92,17 @@ class ComplianceContext:
     audit: AuditChain
     inventory: Optional[InventoryStore] = None
     guard: Optional["AgentGuard"] = None
+    # Optional: only the NIST AI RMF MAP 5.1/5.2 checks (§9.5) read
+    # this. Absent (None) for a caller that hasn't wired one up, which
+    # those checks report as not_applicable rather than treating as a
+    # failure — an unpopulated register is a gap to flag, not an error.
+    impact_register: Optional["ImpactRegister"] = None
+    # Optional: only NIST MEASURE 2.6 (§9.5) reads this, to report
+    # whether the intent-conformance signal (§8.5) is armed. The same
+    # instance AppState wires into AgentGuard — passed separately here
+    # rather than reached through the guard, since AgentGuard keeps its
+    # detection engine private.
+    detection: Optional["DetectionEngine"] = None
 
 
 CheckFn = Callable[[ComplianceContext], ControlResult]
@@ -94,7 +112,7 @@ CheckFn = Callable[[ComplianceContext], ControlResult]
 class Control:
     control_id: str
     title: str
-    guide_tier: GuideTier
+    guide_tier: "GuideTier | str"
     check: CheckFn
 
 

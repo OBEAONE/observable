@@ -11,7 +11,9 @@ from __future__ import annotations
 import dataclasses
 
 from observable.api.pop import NonceCache
+from observable.compliance.impact_register import ImpactRegister, seed_reflexive_governance_entries
 from observable.detection.engine import DetectionEngine
+from observable.detection.intent import build_intent_checker_from_env
 from observable.guard.gateway import AgentGuard
 from observable.identity.registry import IdentityRegistry
 from observable.inventory.connector import SaaSConnector
@@ -34,6 +36,7 @@ class AppState:
     inventory: InventoryStore
     connectors: dict[str, SaaSConnector]
     detection: DetectionEngine
+    impact_register: ImpactRegister
 
     def run_scan(self, connector_id: str | None = None):
         """Run one or all registered connectors and ingest the
@@ -70,7 +73,11 @@ def build_default_state() -> AppState:
     registry = IdentityRegistry(ca)
     policy_engine = PolicyEngine(ca=ca, bundle=default_bundle())
     token_service = TokenService(ca=ca, registry=registry, scope_authorizer=policy_engine)
-    detection = DetectionEngine(sensitivity_lookup=policy_engine)
+    # Off by default (OBSERVABLE_INTENT_SCORER unset) — see §8.5. Reading
+    # the env at process start, not per-request, matches every other
+    # operator-facing toggle in this file (auto_contain_threshold, etc.).
+    intent_checker = build_intent_checker_from_env()
+    detection = DetectionEngine(sensitivity_lookup=policy_engine, intent_checker=intent_checker)
     guard = AgentGuard(
         registry=registry,
         token_service=token_service,
@@ -158,6 +165,15 @@ def build_default_state() -> AppState:
 
     default_connector = MockConnector()
 
+    # Seeded, not empty: an unpopulated Impact Register makes NIST AI
+    # RMF's MAP 5.1 check (§9.5) FAIL outright ("no impacts have been
+    # characterized yet"), and Observable's own detection/intent
+    # components are themselves AI systems under the guide's
+    # definition — this is where that reflexive-governance story is
+    # recorded rather than left implicit (see impact_register.py).
+    impact_register = ImpactRegister()
+    seed_reflexive_governance_entries(impact_register)
+
     return AppState(
         ca=ca,
         registry=registry,
@@ -168,4 +184,5 @@ def build_default_state() -> AppState:
         inventory=InventoryStore(),
         connectors={default_connector.connector_id: default_connector},
         detection=detection,
+        impact_register=impact_register,
     )

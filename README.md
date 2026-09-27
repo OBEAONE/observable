@@ -23,12 +23,13 @@ pip install -r requirements.txt
 pytest -q
 ```
 
-163 tests across all planes (PKI, identity, tokens, policy, audit +
+211 tests across all planes (PKI, identity, tokens, policy, audit +
 gateway, Agent Guard HTTP API, SaaS connectors, inventory store,
 shadow-AI detector, posture engine, Inventory HTTP API, behavior
 baseline, anomaly scorer, detection engine + guard wiring, Detection
-HTTP API, compliance framework + report, compliance HTTP API, CEF/JSON
-SIEM export, SOAR incident export, export HTTP API).
+HTTP API, intent-conformance signal (§8.5), compliance framework +
+report, compliance HTTP API, NIST AI RMF control set + Impact Register
+(§9.5), CEF/JSON SIEM export, SOAR incident export, export HTTP API).
 
 ## Run the walkthroughs
 
@@ -36,7 +37,9 @@ SIEM export, SOAR incident export, export HTTP API).
 python3 demo.py                      # Agent Guard: ARCHITECTURE.md §6
 python3 inventory_demo.py            # Inventory & Posture: ARCHITECTURE.md §7
 python3 detection_demo.py            # Detection plane: ARCHITECTURE.md §8
+python3 intent_demo.py               # Intent-conformance signal: ARCHITECTURE.md §8.5
 python3 compliance_export_demo.py    # Compliance & export: ARCHITECTURE.md §9
+python3 nist_compliance_demo.py      # NIST AI RMF + Impact Register: ARCHITECTURE.md §9.5
 ```
 
 `demo.py` runs the full Agent Guard flow against the real FastAPI app
@@ -61,6 +64,14 @@ never touched before — and shows it getting caught and the agent
 auto-contained mid-burst on behavior alone, with no rule anywhere
 naming the specific resource IDs.
 
+`intent_demo.py` arms the optional `intent_mismatch` signal
+(`OBSERVABLE_INTENT_SCORER=mock`, no GPU needed) and declares a
+reporting-analyst's purpose at token mint: reads that stay in scope for
+that purpose sail through unaffected, while a call to a tool sharing no
+vocabulary with the declared purpose gets flagged, pushing the combined
+risk score over that tool's own policy ceiling — off by default in
+every other walkthrough and deployment.
+
 `compliance_export_demo.py` shows a fresh instance's compliance report
 (some controls `partial` or `not_applicable` until an operator acts),
 an inventory scan turning two controls red, the operator closing the
@@ -68,6 +79,17 @@ automated-containment gap, a live attack getting auto-contained, that
 event exported as CEF for a SIEM, the same event as a SOAR-ready
 incident with recommended next steps, and the incident closing itself
 out once the operator reinstates the agent.
+
+`nist_compliance_demo.py` shows the Impact Register (MAP 5) seeded
+with Observable's own reflexive-governance entries, adds and resolves
+one more entry, then runs `GET /compliance/report?framework=nist-ai-rmf`
+— a second, independent lens over the same live instance, mapped to
+NIST AI RMF 1.0's GOVERN/MAP/MEASURE/MANAGE subcategories instead of
+the Zero Trust for AI Agents guide's rows — including one control
+(MEASURE 3.3) that deliberately reports `fail`: no end-user/agent-
+operator feedback or appeal channel exists yet, a real, named gap
+rather than a hidden one. The original `?framework=zta` report keeps
+working unchanged on the same endpoint.
 
 ## Serve it for real
 
@@ -95,13 +117,16 @@ observable/
   inventory/      Blocks 7-10 — SaaS connectors, inventory store,
                   shadow-AI detector, posture findings engine
   detection/      §8 — behavior baseline, anomaly scorer, detection
-                  engine
-  compliance/     §9.1 — control framework + report generation
+                  engine; §8.5 — intent-conformance signal (intent.py)
+  compliance/     §9.1 — control framework + report generation;
+                  §9.5 — NIST AI RMF control set + Impact Register
   export/         §9.2-9.3 — CEF/JSON SIEM export, SOAR incident export
 tests/                     pytest suite, one file per block
 demo.py                    Agent Guard end-to-end walkthrough (§6)
 inventory_demo.py          Inventory & Posture end-to-end walkthrough (§7)
 detection_demo.py          Detection plane end-to-end walkthrough (§8)
+intent_demo.py             Intent-conformance signal walkthrough (§8.5)
 compliance_export_demo.py  Compliance & export end-to-end walkthrough (§9)
+nist_compliance_demo.py    NIST AI RMF + Impact Register walkthrough (§9.5)
 ARCHITECTURE.md            Full design document
 ```

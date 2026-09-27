@@ -44,6 +44,7 @@ from observable.api.models import (
     AuditEntryResponse,
     AuditVerifyResponse,
     BaselineSummaryResponse,
+    IntentStatusResponse,
     ComplianceReportResponse,
     ContainRequest,
     ControlResultResponse,
@@ -51,6 +52,10 @@ from observable.api.models import (
     DriftResponse,
     EnrollRequest,
     EnrollResponse,
+    ImpactEntryRequest,
+    ImpactEntryResponse,
+    ImpactRegisterResponse,
+    ImpactStatusUpdateRequest,
     InvokeRequest,
     InvokeResponse,
     PostureFindingResponse,
@@ -64,6 +69,8 @@ from observable.api.models import (
 from observable.api.pop import SignatureVerificationError, verify_request_signature
 from observable.api.state import AppState, build_default_state
 from observable.compliance.framework import ComplianceContext
+from observable.compliance.impact_register import ImpactRegisterError
+from observable.compliance.nist_ai_rmf import NIST_AI_RMF_CONTROLS
 from observable.compliance.report import generate_report
 from observable.export.cef import export_audit_cef, export_audit_json_lines
 from observable.export.soar import build_incidents_from_audit, export_incidents_json
@@ -290,6 +297,7 @@ def gateway_invoke(
         redactions=result.redactions,
         risk_score=result.risk_score,
         detection_signals=result.detection_signals,
+        detection_degraded=result.detection_degraded,
     )
 
 
@@ -544,17 +552,48 @@ def set_detection_threshold(
     return {"auto_contain_threshold": body.threshold}
 
 
+@app.get("/admin/detection/intent", response_model=IntentStatusResponse)
+def detection_intent_status(state: AppState = Depends(get_state)) -> IntentStatusResponse:
+    """Operator-facing status for the §8.5 intent-conformance signal:
+    which mode is armed (off/mock/clm), the sensitivity floor, and
+    failure counters — so a scorer that's silently fail-opening on
+    every call (bad OBSERVABLE_CLM_URL, expired key) is visible instead
+    of just quietly contributing nothing to every risk_score."""
+    checker = state.detection.intent_checker
+    if checker is None:
+        return IntentStatusResponse(
+            mode="off", enabled=False, min_sensitivity="medium", calls=0, failures=0, last_error=None
+        )
+    return IntentStatusResponse(**checker.stats())
+
+
 @app.get("/compliance/report", response_model=ComplianceReportResponse)
-def compliance_report(state: AppState = Depends(get_state)) -> ComplianceReportResponse:
+def compliance_report(
+    framework: str = "zta", state: AppState = Depends(get_state)
+) -> ComplianceReportResponse:
+    """``framework=zta`` (default) runs the §9.1 control set mapped to
+    ARCHITECTURE.md §5's Zero Trust for AI Agents guide rows.
+    ``framework=nist-ai-rmf`` runs the §9.5 control set mapped to NIST
+    AI RMF 1.0 GOVERN/MAP/MEASURE/MANAGE subcategories instead — same
+    live instance, same ComplianceContext, a different lens over it."""
+    if framework not in ("zta", "nist-ai-rmf"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown framework {framework!r}; expected 'zta' or 'nist-ai-rmf'",
+        )
     ctx = ComplianceContext(
         registry=state.registry,
         policy_engine=state.policy_engine,
         audit=state.guard.audit,
         inventory=state.inventory,
         guard=state.guard,
+        impact_register=state.impact_register,
+        detection=state.detection,
     )
-    report = generate_report(ctx)
+    controls = NIST_AI_RMF_CONTROLS if framework == "nist-ai-rmf" else None
+    report = generate_report(ctx) if controls is None else generate_report(ctx, controls=controls)
     return ComplianceReportResponse(
+        framework=framework,
         generated_at=report.generated_at.isoformat(),
         overall_status=report.overall_status.value,
         counts=report.counts,
@@ -562,7 +601,7 @@ def compliance_report(state: AppState = Depends(get_state)) -> ComplianceReportR
             ControlResultResponse(
                 control_id=r.control_id,
                 title=r.title,
-                guide_tier=r.guide_tier.value,
+                guide_tier=getattr(r.guide_tier, "value", r.guide_tier),
                 status=r.status.value,
                 summary=r.summary,
                 evidence=r.evidence,
@@ -570,6 +609,72 @@ def compliance_report(state: AppState = Depends(get_state)) -> ComplianceReportR
             for r in report.results
         ],
     )
+
+
+def _impact_entry_response(entry) -> ImpactEntryResponse:
+    return ImpactEntryResponse(
+        entry_id=entry.entry_id,
+        title=entry.title,
+        category=entry.category.value,
+        affected_parties=entry.affected_parties,
+        description=entry.description,
+        severity=entry.severity.value,
+        likelihood=entry.likelihood.value,
+        status=entry.status.value,
+        mitigation=entry.mitigation,
+        related_component=entry.related_component,
+        created_at=entry.created_at.isoformat(),
+        updated_at=entry.updated_at.isoformat(),
+    )
+
+
+@app.get("/compliance/impact-register", response_model=ImpactRegisterResponse)
+def get_impact_register(state: AppState = Depends(get_state)) -> ImpactRegisterResponse:
+    """NIST AI RMF MAP 5 (§9.5): every impact to individuals, groups,
+    organizations, or society this deployment has characterized so
+    far — including the reflexive entries for Observable's own
+    detection/intent-conformance components, seeded at startup."""
+    entries = state.impact_register.list()
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry.status.value] = counts.get(entry.status.value, 0) + 1
+    return ImpactRegisterResponse(
+        counts=counts, entries=[_impact_entry_response(e) for e in entries]
+    )
+
+
+@app.post("/compliance/impact-register", response_model=ImpactEntryResponse)
+def add_impact_entry(
+    body: ImpactEntryRequest, state: AppState = Depends(get_state)
+) -> ImpactEntryResponse:
+    try:
+        entry = state.impact_register.add(
+            title=body.title,
+            category=body.category,
+            affected_parties=body.affected_parties,
+            description=body.description,
+            severity=body.severity,
+            likelihood=body.likelihood,
+            mitigation=body.mitigation,
+            related_component=body.related_component,
+            status=body.status,
+        )
+    except ImpactRegisterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _impact_entry_response(entry)
+
+
+@app.post("/compliance/impact-register/{entry_id}/status", response_model=ImpactEntryResponse)
+def update_impact_entry_status(
+    entry_id: str, body: ImpactStatusUpdateRequest, state: AppState = Depends(get_state)
+) -> ImpactEntryResponse:
+    try:
+        entry = state.impact_register.update_status(
+            entry_id, body.status, mitigation=body.mitigation
+        )
+    except ImpactRegisterError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _impact_entry_response(entry)
 
 
 @app.get("/export/siem")

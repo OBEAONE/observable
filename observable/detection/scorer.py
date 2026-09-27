@@ -24,6 +24,7 @@ import datetime as dt
 from typing import Callable, Optional, Protocol
 
 from observable.detection.baseline import AgentBehaviorBaseline
+from observable.detection.intent import IntentChecker
 
 # --- tunable thresholds -------------------------------------------------
 RATE_MIN_SAMPLES = 5  # need this many learned intervals before scoring rate at all
@@ -45,12 +46,15 @@ DENY_RATE_THRESHOLD = 0.5  # fraction of recent attempts denied before this sign
 
 
 class SensitivityLookup(Protocol):
-    """What the scorer needs to weight a new-tool signal by how
-    sensitive the tool is. ``observable.policy.engine.PolicyEngine`` already
-    implements this exact method — see Block 4 — so wiring is a matter
-    of passing the existing policy engine in, not building a new one."""
+    """What the scorer needs from a tool registry: how sensitive a tool
+    is (weights the new-tool signal) and its registered description
+    (read by the intent-conformance signal, §8.5).
+    ``observable.policy.engine.PolicyEngine`` already implements both
+    methods — see Block 4 — so wiring is a matter of passing the
+    existing policy engine in, not building a new one."""
 
     def tool_sensitivity(self, tool_name: str): ...
+    def tool_description(self, tool_name: str) -> Optional[str]: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -58,6 +62,8 @@ class RiskAssessment:
     risk_score: float
     signals: list[str]
     signal_scores: dict[str, float]
+    detection_degraded: bool = False
+    degraded_reason: Optional[str] = None
 
 
 def _score_burst_rate(baseline: AgentBehaviorBaseline, timestamp: dt.datetime) -> tuple[float, Optional[str]]:
@@ -122,6 +128,30 @@ def _score_deny_rate(baseline: AgentBehaviorBaseline, timestamp: dt.datetime) ->
     return risk, f"deny_rate({deny_fraction:.0%} of {len(recent)} recent attempts)"
 
 
+def _score_intent(
+    baseline: AgentBehaviorBaseline,
+    *,
+    tool: str,
+    role: Optional[str],
+    purpose: Optional[str],
+    sensitivity_lookup: Optional[SensitivityLookup],
+    intent_checker: Optional[IntentChecker],
+) -> tuple[float, Optional[str], bool, Optional[str]]:
+    if intent_checker is None or role is None:
+        return 0.0, None, False, None
+    sensitivity = sensitivity_lookup.tool_sensitivity(tool) if sensitivity_lookup else None
+    description = sensitivity_lookup.tool_description(tool) if sensitivity_lookup else None
+    result = intent_checker.check(
+        role=role,
+        purpose=purpose,
+        recent_tools=baseline.recent_allowed_tools(),
+        tool_name=tool,
+        tool_description=description,
+        sensitivity=sensitivity,
+    )
+    return result.risk, result.label, result.degraded, result.degraded_reason
+
+
 def score_event(
     baseline: AgentBehaviorBaseline,
     *,
@@ -129,10 +159,18 @@ def score_event(
     resource_id: Optional[str],
     timestamp: dt.datetime,
     sensitivity_lookup: Optional[SensitivityLookup] = None,
+    intent_checker: Optional[IntentChecker] = None,
+    role: Optional[str] = None,
+    purpose: Optional[str] = None,
 ) -> RiskAssessment:
     """Score a hypothetical next event against ``baseline`` without
     mutating it. Call ``baseline.record_event(...)`` separately, after
-    the event's outcome is known, to have future scoring reflect it."""
+    the event's outcome is known, to have future scoring reflect it.
+
+    ``intent_checker``/``role``/``purpose`` add the optional §8.5
+    intent-conformance signal on top of the four statistical/threshold
+    signals below; omitting them (the default) scores exactly as before
+    §8.5 existed."""
     signal_scores: dict[str, float] = {}
     signals: list[str] = []
 
@@ -146,9 +184,27 @@ def score_event(
             signal_scores[label] = score
             signals.append(label)
 
+    intent_risk, intent_label, degraded, degraded_reason = _score_intent(
+        baseline,
+        tool=tool,
+        role=role,
+        purpose=purpose,
+        sensitivity_lookup=sensitivity_lookup,
+        intent_checker=intent_checker,
+    )
+    if intent_label is not None and intent_risk > 0.0:
+        signal_scores[intent_label] = intent_risk
+        signals.append(intent_label)
+
     combined = 1.0
     for score in signal_scores.values():
         combined *= 1.0 - score
     risk_score = 1.0 - combined
 
-    return RiskAssessment(risk_score=risk_score, signals=signals, signal_scores=signal_scores)
+    return RiskAssessment(
+        risk_score=risk_score,
+        signals=signals,
+        signal_scores=signal_scores,
+        detection_degraded=degraded,
+        degraded_reason=degraded_reason,
+    )

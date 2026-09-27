@@ -1,321 +1,311 @@
 """
-Detection Block D — intent-conformance signal (``intent_mismatch``).
+Detection Block E — intent-conformance signal (ARCHITECTURE.md §8.5).
 
-The four statistical signals in ``observable.detection.scorer`` see *how*
-an agent behaves (pace, novelty, denials) but not *whether an action
-makes sense for what the agent is supposed to be doing*. That blind spot
-is where the guide's hardest threats live — tool chaining, confused-deputy
-relays, indirect prompt injection — because every individual call there
-is authorized and statistically unremarkable; only its fit with the
-agent's purpose is wrong.
+The four signals in ``scorer.py`` see *how* an agent behaves — its pace,
+what's new to it, how often it is denied — but not *whether an action
+makes sense for what the agent is supposed to be doing*. This module
+adds one optional fifth signal, ``intent_mismatch``: given an agent's
+role, its declared purpose (signed into its token at mint, §4.2) and
+its recent allowed tool calls, is calling this tool consistent with
+that purpose?
 
-This module asks one question per request: *given this agent's role, its
-declared purpose (``req_ctx.purpose``, signed into its token at mint) and
-its recent tool calls, is calling this tool consistent with that
-purpose?* The answer is a probability ``p_consistent``; a low value
-becomes a fifth, noisy-OR-combined detection signal.
-
-Design rules (ARCHITECTURE.md §8.5):
+Design principles carried over verbatim from the architecture doc:
 
 * **Pluggable scorer**, same pattern as ``CertificateAuthority`` and
-  ``SaaSConnector``: ``IntentScorer`` is the interface,
-  ``MockIntentScorer`` a deterministic keyword stand-in for tests/demos,
-  ``CLMIntentScorer`` the adapter for a self-hosted Contrastive Language
-  Model server (``clm-serve``, CLM-v0.1-8B on Qwen3-8B). Nothing above the
-  interface changes when one is swapped for another.
-* **A signal, never a control.** The contribution is capped at
-  ``INTENT_MAX_RISK`` so this signal alone can never reach 1.0; it can
-  only push an already-suspicious request over a tool's ABAC
-  ``max_risk_score`` or an operator's containment threshold. Deny-by-
-  default policy, PoP tokens and scopes are unaffected by it.
-* **Fail-open, but loudly.** If the scorer is unreachable or errors, the
-  request is scored without this signal (the hard controls still apply)
-  and the outage is reported as a ``degraded`` note on the assessment,
-  the Guard result and ``GET /admin/detection/intent`` — never silently.
-* **Explainable output.** The signal label carries the tool, the
-  probability, the scorer name and the purpose it was judged against, so
-  it can be read in the audit trail like the statistical signals.
+  ``SaaSConnector`` — ``IntentScorer`` is the interface, nothing above
+  it changes when an implementation is swapped.
+* **A signal, never a control.** Its contribution to the combined risk
+  score is capped at 0.5, so it alone can never deny a tool whose
+  ceiling is above 0.5, nor trip an auto-containment threshold set
+  above 0.5. Deny-by-default policy, PoP tokens and scopes are
+  untouched — this only adds evidence to an already-suspicious request.
+* **Fail-open, but loudly.** A scorer timeout or error never blocks the
+  request; the hard controls still apply. The outage is never silent:
+  it's surfaced as ``degraded`` on the assessment, propagated to
+  ``GuardResult.detection_degraded`` and the audit entry's reason, and
+  counted in failure counters exposed at ``GET /admin/detection/intent``.
+* **Off by default.** Turning this on (and choosing mock vs. a real
+  model) is an explicit operator decision via ``OBSERVABLE_INTENT_SCORER``,
+  never an implicit side effect of upgrading Observable.
 """
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
-import threading
-import time
-from typing import Optional, Protocol, Sequence
-
-import httpx
+from typing import Optional, Protocol
 
 from observable.policy.bundle import Sensitivity
 
-# --- tunable thresholds -------------------------------------------------
-INTENT_CONSISTENT_THRESHOLD = 0.5  # p_consistent at/above this -> no signal
-INTENT_MAX_RISK = 0.5  # cap: this signal alone can never exceed this
-PURPOSE_LABEL_MAX_CHARS = 60  # purpose is agent-supplied; keep labels short
-RECENT_TOOLS_IN_STATE = 5
+# --- tunables (all overridable via env, see build_intent_checker_from_env) -
+DEFAULT_MIN_SENSITIVITY = Sensitivity.MEDIUM
+DEFAULT_CLM_TIMEOUT_SECONDS = 5.0
+DEFAULT_RECENT_TOOLS_LIMIT = 5
 
-_SENSITIVITY_ORDER = {Sensitivity.LOW: 0, Sensitivity.MEDIUM: 1, Sensitivity.HIGH: 2}
+_SENSITIVITY_ORDER: dict[Sensitivity, int] = {
+    Sensitivity.LOW: 0,
+    Sensitivity.MEDIUM: 1,
+    Sensitivity.HIGH: 2,
+}
 
-
-class IntentScorerError(Exception):
-    """Raised by a scorer when it cannot produce an answer (network
-    failure, bad response). The checker turns this into a ``degraded``
-    note rather than a signal."""
-
-
-@dataclasses.dataclass(frozen=True)
-class IntentQuery:
-    """Everything a scorer is allowed to see. Deliberately excludes the
-    request payload: this signal judges *which tool* for *which
-    purpose*; payload-level analysis (injection, leakage) is a separate
-    concern."""
-
-    role: str
-    purpose: str
-    recent_tools: tuple[str, ...]
-    tool_name: str
-    tool_description: str
-
-
-class IntentScorer(Protocol):
-    name: str
-
-    def p_consistent(self, query: IntentQuery) -> float:
-        """Probability in [0, 1] that calling ``query.tool_name`` is
-        consistent with the declared purpose. Raises
-        ``IntentScorerError`` if it cannot answer."""
-        ...
-
-
-class ToolCatalog(Protocol):
-    """What the checker needs from the policy plane.
-    ``observable.policy.engine.PolicyEngine`` implements both methods."""
-
-    def registered_tools(self) -> dict: ...
-
-    def tool_sensitivity(self, tool_name: str): ...
-
-
-# ----------------------------------------------------------------------
-# Scorers
-# ----------------------------------------------------------------------
 _STOPWORDS = {
-    "the", "and", "for", "with", "from", "into", "this", "that", "our", "your",
-    "all", "any", "new", "existing", "agent", "record", "records", "data",
+    "a", "an", "the", "of", "to", "from", "and", "or", "for", "on", "in",
+    "at", "is", "with", "this", "that", "about", "into", "as", "by",
 }
 
 
-def _tokens(text: str) -> set[str]:
-    return {t for t in re.split(r"[^a-z0-9]+", text.lower()) if len(t) >= 3 and t not in _STOPWORDS}
+def _words(text: Optional[str]) -> set[str]:
+    if not text:
+        return set()
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return {t for t in tokens if t not in _STOPWORDS and len(t) > 1}
+
+
+class IntentScorerError(Exception):
+    """Raised by an ``IntentScorer`` on any failure (timeout, transport
+    error, malformed response). Caught by ``IntentChecker``, which fails
+    open — see module docstring."""
+
+
+class IntentScorer(Protocol):
+    """What ``IntentChecker`` needs from a scorer implementation. Returns
+    ``p_consistent`` in [0, 1]: the scorer's estimate that calling
+    ``tool_name`` is consistent with ``purpose``, given ``role`` and the
+    agent's ``recent_tools``. Never sees the request payload — only
+    role, purpose, recent tool names, and the candidate tool's own
+    registered name/description (§8.5 "what the scorer sees")."""
+
+    def score(
+        self,
+        *,
+        role: str,
+        purpose: Optional[str],
+        recent_tools: list[str],
+        tool_name: str,
+        tool_description: str,
+    ) -> float: ...
 
 
 class MockIntentScorer:
-    """Deterministic keyword-overlap stand-in for dev, tests and demos.
-    It has no semantic understanding: it only checks whether the tool's
-    name/description shares words with the declared purpose. It exists
-    so the full signal path can be exercised without a GPU, exactly like
-    ``ReferenceCA`` and ``MockConnector``. Never use it in production."""
+    """Deterministic keyword overlap between the declared purpose and
+    the candidate tool's name/description. No semantic understanding —
+    it exists so the full path runs in tests and demos without a GPU.
+    Never for production (see ``CLMIntentScorer``).
 
-    name = "mock"
+    ``p_consistent = 0.15 + 0.35 * min(overlap, 2)``: zero shared words
+    scores 0.15 (a clear mismatch — this signal will fire), one shared
+    word scores 0.50 (borderline, does not fire), two or more shared
+    words scores 0.85 (clearly consistent)."""
 
-    def p_consistent(self, query: IntentQuery) -> float:
-        purpose = _tokens(query.purpose)
-        tool = _tokens(f"{query.tool_name} {query.tool_description}")
-        overlap = len(purpose & tool)
-        if overlap == 0:
-            return 0.1
-        if overlap == 1:
-            return 0.6
-        return 0.9
+    def score(
+        self,
+        *,
+        role: str,
+        purpose: Optional[str],
+        recent_tools: list[str],
+        tool_name: str,
+        tool_description: str,
+    ) -> float:
+        purpose_words = _words(purpose)
+        if not purpose_words:
+            return 0.5  # nothing declared to judge against: stay neutral
+        tool_words = _words(tool_name.replace(".", " ")) | _words(tool_description)
+        overlap = len(purpose_words & tool_words)
+        return min(1.0, 0.15 + 0.35 * min(overlap, 2))
 
 
 class CLMIntentScorer:
-    """Adapter for a self-hosted CLM server (``clm-serve`` from the
-    ``contrastive-lm`` package, default port 8700). Uses the typed
-    ``/v1/systemone`` endpoint with a single yes/no question, which
-    returns an absolute probability rather than one relative to a
-    candidate set — so legitimate multi-tool workflows are not penalised
-    for every tool that isn't the single "best" next move.
+    """Adapter for a self-hosted Contrastive Language Model server
+    (``clm-serve``, CLM-v0.1-8B on a frozen Qwen3-8B encoder). Calls
+    ``POST /v1/systemone`` with one yes/no question and reads back the
+    probability — deliberately not CLM's ranking endpoint, which scores
+    relative to a candidate set and would penalise every legitimate step
+    of a multi-tool workflow that isn't the single "best" next move.
 
-    Only standard-library-plus-httpx; no dependency on the CLM package
-    or on torch in the Observable process."""
+    Depends only on ``httpx``; no torch or CLM package runs inside the
+    Observable process. The CLM server itself runs outside Observable, on
+    a GPU host the customer controls (see ARCHITECTURE.md §8.5
+    Deployment)."""
 
-    name = "clm"
+    def __init__(self, *, base_url: str, api_key: Optional[str] = None, timeout: float = DEFAULT_CLM_TIMEOUT_SECONDS) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout
 
-    QUESTION_KEY = "intent"
-    INSTRUCTIONS = (
-        "Is the requested tool call consistent with the agent's role and declared "
-        "purpose, given its recent tool calls?"
-    )
-    CRITERIA = {
-        "true": "The requested tool call plausibly serves the declared purpose.",
-        "false": (
-            "The requested tool call does not fit the declared purpose, for example "
-            "moving data to an unrelated or external destination."
-        ),
-    }
-
-    def __init__(
+    def score(
         self,
-        base_url: str = "http://127.0.0.1:8700",
         *,
-        api_key: Optional[str] = None,
-        timeout: float = 2.0,
-        model: Optional[str] = None,
-        transport: Optional[httpx.BaseTransport] = None,
-    ) -> None:
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self._model = model
-        self._client = httpx.Client(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=timeout, transport=transport
+        role: str,
+        purpose: Optional[str],
+        recent_tools: list[str],
+        tool_name: str,
+        tool_description: str,
+    ) -> float:
+        import httpx
+
+        question = (
+            f"An AI agent with role '{role}' has declared its purpose as: "
+            f"'{purpose}'. Its recent tool calls were: {recent_tools or 'none yet'}. "
+            f"Is calling the tool '{tool_name}' ({tool_description}) "
+            f"consistent with that declared purpose? Answer yes or no."
         )
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
 
-    def build_request(self, query: IntentQuery) -> dict:
-        body: dict = {
-            "state": {
-                "agent_role": query.role,
-                "declared_purpose": query.purpose,
-                "recent_tool_calls": list(query.recent_tools),
-                "requested_tool": {"name": query.tool_name, "description": query.tool_description},
-            },
-            "questions": {
-                self.QUESTION_KEY: {
-                    "type": "noul",
-                    "instructions": self.INSTRUCTIONS,
-                    "criteria": dict(self.CRITERIA),
-                }
-            },
-        }
-        if self._model:
-            body["model"] = self._model
-        return body
-
-    def p_consistent(self, query: IntentQuery) -> float:
         try:
-            response = self._client.post("/v1/systemone", json=self.build_request(query))
-        except httpx.HTTPError as exc:
-            raise IntentScorerError(f"{type(exc).__name__}: {exc}") from exc
-        if response.status_code != 200:
-            raise IntentScorerError(f"HTTP {response.status_code}: {response.text[:200]}")
-        try:
-            value = float(response.json()["answers"][self.QUESTION_KEY]["noul"])
-        except (ValueError, KeyError, TypeError) as exc:
-            raise IntentScorerError(f"unexpected response shape: {exc}") from exc
-        if not 0.0 <= value <= 1.0:
-            raise IntentScorerError(f"probability out of range: {value}")
-        return value
-
-    def close(self) -> None:
-        self._client.close()
+            response = httpx.post(
+                f"{self._base_url}/v1/systemone",
+                json={"question": question},
+                headers=headers,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return float(data["probability"])
+        except Exception as exc:  # noqa: BLE001 - any failure here fails open, see IntentChecker
+            raise IntentScorerError(f"CLM scorer request failed: {exc}") from exc
 
 
-# ----------------------------------------------------------------------
-# Checker: decides when to ask, turns the answer into a signal
-# ----------------------------------------------------------------------
 @dataclasses.dataclass(frozen=True)
-class IntentResult:
-    risk: float  # 0.0 when no signal
-    label: Optional[str]  # set only when the signal fires
-    degraded: Optional[str] = None  # set when the scorer could not answer
-    p_consistent: Optional[float] = None
-
-
-_NO_SIGNAL = IntentResult(risk=0.0, label=None)
+class IntentCheckResult:
+    risk: float
+    label: Optional[str]
+    degraded: bool
+    degraded_reason: Optional[str]
 
 
 class IntentChecker:
+    """Orchestrates the intent-conformance signal: skip rules (mode,
+    sensitivity floor, no declared purpose), the capped risk formula,
+    and fail-open error handling with failure counters for
+    ``GET /admin/detection/intent``.
+
+    ``mode`` is one of ``"off"``, ``"mock"``, ``"clm"`` — construct via
+    ``build_intent_checker_from_env()`` in normal operation rather than
+    picking a scorer by hand."""
+
     def __init__(
         self,
-        scorer: IntentScorer,
-        catalog: ToolCatalog,
         *,
-        min_sensitivity: Optional[Sensitivity] = None,
+        mode: str = "off",
+        scorer: Optional[IntentScorer] = None,
+        min_sensitivity: Sensitivity = DEFAULT_MIN_SENSITIVITY,
+        recent_tools_limit: int = DEFAULT_RECENT_TOOLS_LIMIT,
     ) -> None:
-        """``min_sensitivity`` limits which tools are checked (e.g.
-        ``Sensitivity.MEDIUM`` skips low-sensitivity reads so a model
-        call is only on the hot path where it matters). ``None`` checks
-        every registered tool."""
-        self.scorer = scorer
-        self._catalog = catalog
-        self.min_sensitivity = min_sensitivity
-        self._lock = threading.Lock()
-        self._stats = {
-            "checked": 0,
-            "fired": 0,
-            "skipped_no_purpose": 0,
-            "skipped_sensitivity": 0,
-            "failures": 0,
-        }
+        if mode not in ("off", "mock", "clm"):
+            raise ValueError(f"unknown intent scorer mode {mode!r}")
+        if mode != "off" and scorer is None:
+            raise ValueError(f"mode {mode!r} requires a scorer instance")
+        self.mode = mode
+        self._scorer = scorer if mode != "off" else None
+        self._min_sensitivity = min_sensitivity
+        self._recent_tools_limit = recent_tools_limit
+        self._calls = 0
+        self._failures = 0
         self._last_error: Optional[str] = None
-        self._last_latency_ms: Optional[float] = None
 
-    def _bump(self, key: str) -> None:
-        with self._lock:
-            self._stats[key] += 1
+    @property
+    def enabled(self) -> bool:
+        return self._scorer is not None
 
     def check(
         self,
         *,
-        role: Optional[str],
+        role: str,
         purpose: Optional[str],
-        tool: str,
-        recent_tools: Sequence[str],
-    ) -> IntentResult:
-        if not purpose or not role:
-            self._bump("skipped_no_purpose")
-            return _NO_SIGNAL
-        definition = self._catalog.registered_tools().get(tool)
-        if definition is None:
-            # Unregistered tool: policy denies it anyway (deny-by-default),
-            # and there is no description to judge.
-            return _NO_SIGNAL
-        if self.min_sensitivity is not None:
-            sensitivity = definition.sensitivity
-            if _SENSITIVITY_ORDER[sensitivity] < _SENSITIVITY_ORDER[self.min_sensitivity]:
-                self._bump("skipped_sensitivity")
-                return _NO_SIGNAL
+        recent_tools: list[str],
+        tool_name: str,
+        tool_description: Optional[str],
+        sensitivity: Optional[Sensitivity],
+    ) -> IntentCheckResult:
+        if self._scorer is None:
+            return IntentCheckResult(risk=0.0, label=None, degraded=False, degraded_reason=None)
+        if not purpose:
+            # Nothing declared to judge the call against — no evidence
+            # either way, so this is a no-op rather than a neutral 0.5
+            # that would otherwise never actually contribute (0.5 - 0.5
+            # = 0 risk), which is the same outcome without a model call.
+            return IntentCheckResult(risk=0.0, label=None, degraded=False, degraded_reason=None)
+        floor = _SENSITIVITY_ORDER.get(sensitivity, _SENSITIVITY_ORDER[Sensitivity.LOW])
+        if floor < _SENSITIVITY_ORDER[self._min_sensitivity]:
+            return IntentCheckResult(risk=0.0, label=None, degraded=False, degraded_reason=None)
 
-        query = IntentQuery(
-            role=role,
-            purpose=purpose,
-            recent_tools=tuple(recent_tools[-RECENT_TOOLS_IN_STATE:]),
-            tool_name=tool,
-            tool_description=definition.description,
-        )
-        started = time.perf_counter()
+        self._calls += 1
         try:
-            p = self.scorer.p_consistent(query)
-        except Exception as exc:  # noqa: BLE001 - any scorer failure degrades, never blocks
-            message = f"intent_scorer_unavailable({self.scorer.name}: {exc})"
-            with self._lock:
-                self._stats["failures"] += 1
-                self._last_error = str(exc)
-            return IntentResult(risk=0.0, label=None, degraded=message)
-        with self._lock:
-            self._stats["checked"] += 1
-            self._last_latency_ms = round((time.perf_counter() - started) * 1000, 1)
+            p_consistent = self._scorer.score(
+                role=role,
+                purpose=purpose,
+                recent_tools=recent_tools[-self._recent_tools_limit :],
+                tool_name=tool_name,
+                tool_description=tool_description or "",
+            )
+        except Exception as exc:  # noqa: BLE001 - fail open, see module docstring
+            self._failures += 1
+            self._last_error = str(exc)
+            return IntentCheckResult(
+                risk=0.0,
+                label=None,
+                degraded=True,
+                degraded_reason=f"detection degraded: intent scorer ({self.mode}) failed: {exc}",
+            )
 
-        if p >= INTENT_CONSISTENT_THRESHOLD:
-            return IntentResult(risk=0.0, label=None, p_consistent=p)
+        if p_consistent >= 0.5:
+            return IntentCheckResult(risk=0.0, label=None, degraded=False, degraded_reason=None)
 
-        risk = INTENT_MAX_RISK * (INTENT_CONSISTENT_THRESHOLD - p) / INTENT_CONSISTENT_THRESHOLD
-        short_purpose = purpose if len(purpose) <= PURPOSE_LABEL_MAX_CHARS else purpose[: PURPOSE_LABEL_MAX_CHARS - 1] + "…"
+        risk = min(0.5, max(0.0, 0.5 - p_consistent))
         label = (
-            f"intent_mismatch(tool={tool!r}, p_consistent={p:.2f}, "
-            f"purpose={short_purpose!r}, scorer={self.scorer.name})"
+            f"intent_mismatch(tool={tool_name!r}, p_consistent={p_consistent:.2f}, "
+            f"purpose={purpose!r}, scorer={self.mode})"
         )
-        self._bump("fired")
-        return IntentResult(risk=risk, label=label, p_consistent=p)
+        return IntentCheckResult(risk=risk, label=label, degraded=False, degraded_reason=None)
 
-    def status(self) -> dict:
-        with self._lock:
-            return {
-                "enabled": True,
-                "scorer": self.scorer.name,
-                "min_sensitivity": self.min_sensitivity.value if self.min_sensitivity else None,
-                "consistent_threshold": INTENT_CONSISTENT_THRESHOLD,
-                "max_risk": INTENT_MAX_RISK,
-                **self._stats,
-                "last_error": self._last_error,
-                "last_latency_ms": self._last_latency_ms,
-            }
+    def stats(self) -> dict:
+        """JSON-friendly snapshot for ``GET /admin/detection/intent``."""
+        return {
+            "mode": self.mode,
+            "enabled": self.enabled,
+            "min_sensitivity": self._min_sensitivity.value,
+            "calls": self._calls,
+            "failures": self._failures,
+            "last_error": self._last_error,
+        }
+
+
+def build_intent_checker_from_env() -> IntentChecker:
+    """Factory reading the operator-facing env vars from ARCHITECTURE.md
+    §8.5:
+
+    * ``OBSERVABLE_INTENT_SCORER`` — ``off`` (default) | ``mock`` | ``clm``
+    * ``OBSERVABLE_INTENT_MIN_SENSITIVITY`` — ``low`` | ``medium``
+      (default) | ``high``: tools below this sensitivity never trigger a
+      model call, so low-risk reads never wait on one.
+    * ``OBSERVABLE_CLM_URL`` — base URL of a self-hosted ``clm-serve``
+      instance, required when mode is ``clm``.
+    * ``OBSERVABLE_CLM_API_KEY`` — optional bearer token for that server.
+
+    Adding an ML-derived input to authorization should never happen
+    implicitly, so an unset or ``off`` mode is the default and this
+    factory never reaches out over the network at construction time —
+    only ``check()`` calls do, and only once armed."""
+    mode = os.environ.get("OBSERVABLE_INTENT_SCORER", "off").strip().lower()
+    min_sensitivity_raw = os.environ.get("OBSERVABLE_INTENT_MIN_SENSITIVITY", "medium").strip().lower()
+    try:
+        min_sensitivity = Sensitivity(min_sensitivity_raw)
+    except ValueError:
+        min_sensitivity = DEFAULT_MIN_SENSITIVITY
+
+    if mode == "off":
+        return IntentChecker(mode="off", scorer=None, min_sensitivity=min_sensitivity)
+    if mode == "mock":
+        return IntentChecker(mode="mock", scorer=MockIntentScorer(), min_sensitivity=min_sensitivity)
+    if mode == "clm":
+        base_url = os.environ.get("OBSERVABLE_CLM_URL")
+        if not base_url:
+            raise ValueError("OBSERVABLE_INTENT_SCORER=clm requires OBSERVABLE_CLM_URL to be set")
+        api_key = os.environ.get("OBSERVABLE_CLM_API_KEY")
+        scorer = CLMIntentScorer(base_url=base_url, api_key=api_key)
+        return IntentChecker(mode="clm", scorer=scorer, min_sensitivity=min_sensitivity)
+    raise ValueError(
+        f"unknown OBSERVABLE_INTENT_SCORER={mode!r}; expected off, mock, or clm"
+    )

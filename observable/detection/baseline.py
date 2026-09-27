@@ -50,6 +50,11 @@ class AgentBehaviorBaseline:
     )
     # (timestamp, decision) for every event, "allow" | "deny" | "error".
     recent_decisions: deque[tuple[dt.datetime, str]] = dataclasses.field(default_factory=deque)
+    # (timestamp, tool, decision) for every event — a superset of
+    # recent_decisions that also names the tool, so the intent-
+    # conformance signal (§8.5) can ask "what has this agent actually
+    # been doing lately" without the scorer needing its own history.
+    recent_tool_calls: deque[tuple[dt.datetime, str, str]] = dataclasses.field(default_factory=deque)
 
     @property
     def interval_mean(self) -> float:
@@ -87,7 +92,17 @@ class AgentBehaviorBaseline:
             self.resources_seen.add(resource_id)
 
         self.recent_decisions.append((timestamp, decision))
+        self.recent_tool_calls.append((timestamp, tool, decision))
         self._prune(timestamp)
+
+    def recent_allowed_tools(self, limit: int = 5) -> list[str]:
+        """The last ``limit`` tool names this agent successfully called,
+        oldest first — exactly the "recent allowed tool calls" context
+        the intent-conformance signal (§8.5) judges a new call against.
+        Denied/errored calls are excluded: they were never part of this
+        agent's actual observed workflow."""
+        allowed = [tool for _, tool, decision in self.recent_tool_calls if decision == "allow"]
+        return allowed[-limit:]
 
     def _update_welford(self, interval: float) -> None:
         self.n_intervals += 1
@@ -102,3 +117,5 @@ class AgentBehaviorBaseline:
             self.new_resource_events.popleft()
         while self.recent_decisions and self.recent_decisions[0][0] < cutoff:
             self.recent_decisions.popleft()
+        while self.recent_tool_calls and self.recent_tool_calls[0][0] < cutoff:
+            self.recent_tool_calls.popleft()

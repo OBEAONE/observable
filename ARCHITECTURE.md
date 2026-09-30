@@ -753,6 +753,21 @@ the console already loads, and is clickable straight through to that
 plane's existing tab — a navigation aid over data already on the page,
 not a new endpoint.
 
+### Marketing landing page, at the root path
+
+`GET /` serves `static/landing.html`, a standalone marketing page for
+observable24.com — separate from, and unrelated to, the security
+platform's own data model. Unlike `console.html`, it is a complete
+document (own `<!doctype>`/`<head>`) with no live data and no JS: a
+static page describing the four planes and their NIST AI RMF mapping in
+prose, reusing the console's color tokens and IBM Plex type for visual
+consistency. It intentionally lives in the same FastAPI app and Render
+service as the rest of Observable so that one deployment, and one
+domain once DNS is pointed at it, carries both the public-facing page
+and the read-only console (still at `/console`, unchanged). `GET /`
+previously redirected to `/console`; that redirect is gone now that
+root has its own page.
+
 ### What v1.5 does *not* do
 
 No feedback/appeal channel itself (MEASURE 3.3 names the gap; closing

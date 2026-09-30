@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observable — SaaS &amp; AI Agent Security</title>
+<meta name="description" content="Observable gives AI agents strong identity, finds shadow AI in your SaaS stack, scores risk from real behavior, and keeps a live, control-by-control compliance report.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #2C5FE0;
+    --accent-light: #6C93FF;
+    --teal: #0E8FA3;
+    --teal-light: #3FC1D6;
+    --measure: #7C5CFC;
+    --measure-light: #A78BFA;
+    --warn: #9A6400;
+    --warn-light: #F0B429;
+    --ink: #0B0F17;
+    --ink-2: #131A27;
+    --paper: #F7F8FA;
+    --paper-2: #F4F6F9;
+    --line: rgba(11,15,23,0.10);
+    --line-dark: rgba(255,255,255,0.10);
+    --muted: #5B6472;
+    --muted-dark: #9AA4B2;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, .mono { font-family: "IBM Plex Mono", monospace; }
+
+  .obs-container {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(16px, 4vw, 40px);
+  }
+
+  /* ---------- Nav ---------- */
+  .obs-nav {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgba(247,248,250,0.88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .obs-nav-inner {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 14px clamp(16px, 4vw, 40px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .obs-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .obs-logo-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--measure));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+  .obs-nav-links {
+    display: flex;
+    align-items: center;
+    gap: clamp(14px, 2vw, 28px);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .obs-nav-links a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .obs-nav-links a:hover { color: var(--ink); }
+  .obs-nav-cta-wrap { display: flex; align-items: center; gap: 18px; }
+
+  @media (max-width: 760px) {
+    .obs-nav-links { display: none; }
+  }
+
+  .obs-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .obs-btn-primary { background: var(--accent); color: #fff; }
+  .obs-btn-primary:hover { background: #244ec2; }
+  .obs-btn-ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  .obs-btn-ghost:hover { border-color: var(--ink); }
+  .obs-btn-on-dark { background: #fff; color: var(--ink); }
+  .obs-btn-on-dark:hover { background: #E7EBF3; }
+  .obs-btn-ghost-on-dark { background: transparent; color: #fff; border-color: rgba(255,255,255,0.28); }
+  .obs-btn-ghost-on-dark:hover { border-color: #fff; }
+
+  /* ---------- Hero ---------- */
+  .obs-hero {
+    padding: clamp(56px, 9vw, 108px) 0 clamp(40px, 7vw, 80px);
+  }
+  .obs-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+    gap: clamp(28px, 5vw, 56px);
+    align-items: center;
+  }
+  @media (max-width: 880px) {
+    .obs-hero-grid { grid-template-columns: 1fr; }
+  }
+  .obs-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(44,95,224,0.08);
+    border: 1px solid rgba(44,95,224,0.18);
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 18px;
+  }
+  .obs-h1 {
+    font-size: clamp(32px, 5vw, 52px);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+    margin: 0 0 18px;
+  }
+  .obs-h1 .hl { color: var(--accent); }
+  .obs-lede {
+    font-size: clamp(16px, 1.6vw, 18.5px);
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 52ch;
+    margin: 0 0 30px;
+  }
+  .obs-hero-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 26px; }
+  .obs-hero-note { font-size: 13px; color: var(--muted); }
+
+  .obs-hero-visual {
+    background: var(--ink);
+    border-radius: 18px;
+    padding: clamp(18px, 2.4vw, 28px);
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 24px 60px -24px rgba(11,15,23,0.45);
+  }
+  .obs-hero-visual-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .obs-hero-visual-title { color: #fff; font-size: 13px; font-weight: 600; }
+  .obs-hero-dot-row { display: flex; gap: 6px; }
+  .obs-hero-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.2); }
+  .obs-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .obs-kpi-tile {
+    background: var(--ink-2);
+    border: 1px solid var(--line-dark);
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .obs-kpi-tile .lbl { font-size: 11.5px; color: var(--muted-dark); margin-bottom: 8px; }
+  .obs-kpi-tile .val { font-family: "IBM Plex Mono", monospace; font-size: 20px; font-weight: 600; color: #fff; }
+  .obs-kpi-tile .sub { font-size: 11px; color: var(--muted-dark); margin-top: 4px; }
+  .obs-kpi-tile.ok .val { color: var(--teal-light); }
+  .obs-kpi-tile.warn .val { color: var(--warn-light); }
+  .obs-kpi-tile.accent .val { color: var(--accent-light); }
+  .obs-kpi-tile.measure .val { color: var(--measure-light); }
+
+  /* ---------- Section shells ---------- */
+  .obs-section { padding: clamp(48px, 8vw, 96px) 0; }
+  .obs-section-dark { background: var(--ink); color: #fff; }
+  .obs-section-alt { background: var(--paper-2); }
+  .obs-section-head { max-width: 640px; margin: 0 0 clamp(32px, 5vw, 52px); }
+  .obs-kicker {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  .obs-section-dark .obs-kicker { color: var(--accent-light); }
+  .obs-h2 {
+    font-size: clamp(24px, 3.4vw, 34px);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    font-weight: 700;
+    margin: 0 0 12px;
+  }
+  .obs-section-sub {
+    font-size: 15.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0;
+  }
+  .obs-section-dark .obs-section-sub { color: var(--muted-dark); }
+
+  /* ---------- Problem cols ---------- */
+  .obs-cols-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: clamp(18px, 2.4vw, 26px);
+  }
+  .obs-problem-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+  }
+  .obs-problem-num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .obs-problem-card h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+  .obs-problem-card p {
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  /* ---------- Platform cards ---------- */
+  .obs-cols-4 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: clamp(16px, 2vw, 22px);
+  }
+  .obs-plane-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .obs-plane-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+  .obs-plane-icon svg { width: 22px; height: 22px; }
+  .obs-plane-card h3 { font-size: 16px; font-weight: 600; margin: 0; }
+  .obs-plane-card .obs-plane-tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .obs-plane-card p { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0; }
+
+  /* ---------- NIST cycle (prose diagram) ---------- */
+  .obs-nist-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(280px, 1.05fr);
+    gap: clamp(28px, 4vw, 48px);
+    align-items: center;
+  }
+  @media (max-width: 880px) {
+    .obs-nist-wrap { grid-template-columns: 1fr; }
+  }
+  .obs-nist-diagram {
+    background: var(--ink-2);
+    border: 1px solid var(--line-dark);
+    border-radius: 16px;
+    padding: clamp(20px, 3vw, 30px);
+  }
+  .obs-nist-hub {
+    text-align: center;
+    padding: 14px 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.06);
+    border: 1px dashed rgba(255,255,255,0.22);
+    margin-bottom: 18px;
+  }
+  .obs-nist-hub .t { font-size: 12px; letter-spacing: 0.05em; color: var(--muted-dark); text-transform: uppercase; }
+  .obs-nist-hub .n { font-size: 15px; font-weight: 600; color: #fff; margin-top: 4px; }
+  .obs-nist-cycle-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .obs-nist-chip {
+    flex: 1 1 140px;
+    background: var(--ink);
+    border-radius: 10px;
+    padding: 14px 12px;
+    border-top: 3px solid var(--accent);
+  }
+  .obs-nist-chip.m2 { border-top-color: var(--measure); }
+  .obs-nist-chip.m3 { border-top-color: var(--warn); }
+  .obs-nist-chip .k { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--muted-dark); }
+  .obs-nist-chip .n { font-size: 13.5px; font-weight: 600; color: #fff; margin-top: 4px; }
+  .obs-nist-chip .p { font-size: 11.5px; color: var(--muted-dark); margin-top: 6px; line-height: 1.5; }
+  .obs-nist-arrow {
+    align-self: center;
+    color: var(--muted-dark);
+    font-size: 16px;
+    flex: 0 0 auto;
+  }
+  .obs-nist-legend { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .obs-nist-legend li { font-size: 13px; color: var(--muted); line-height: 1.6; display: flex; gap: 10px; }
+  .obs-nist-sw { width: 10px; height: 10px; border-radius: 3px; margin-top: 5px; flex: 0 0 10px; }
+
+  /* ---------- How it works ---------- */
+  .obs-steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: clamp(18px, 2.4vw, 24px);
+  }
+  .obs-step-card { position: relative; padding-left: 4px; }
+  .obs-step-num {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+  }
+  .obs-step-card h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+  .obs-step-card p { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0; }
+
+  /* ---------- CTA band ---------- */
+  .obs-cta-band {
+    text-align: center;
+    padding: clamp(48px, 8vw, 84px) 0;
+  }
+  .obs-cta-band .obs-h2 { max-width: 640px; margin: 0 auto 16px; }
+  .obs-cta-band p { color: var(--muted-dark); max-width: 520px; margin: 0 auto 28px; font-size: 15.5px; line-height: 1.6; }
+  .obs-cta-band .obs-hero-ctas { justify-content: center; }
+
+  /* ---------- Contact ---------- */
+  .obs-contact-grid {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) minmax(280px, 0.8fr);
+    gap: clamp(28px, 4vw, 48px);
+  }
+  @media (max-width: 820px) {
+    .obs-contact-grid { grid-template-columns: 1fr; }
+  }
+  .obs-contact-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: clamp(22px, 3vw, 30px);
+  }
+  .obs-contact-row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .obs-contact-row:first-child { border-top: none; padding-top: 0; }
+  .obs-contact-row .k { color: var(--muted); }
+  .obs-contact-row .v { font-weight: 600; text-align: right; }
+
+  /* ---------- Footer ---------- */
+  .obs-footer {
+    border-top: 1px solid var(--line);
+    padding: 30px 0;
+  }
+  .obs-footer-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .obs-footer-links { display: flex; gap: 20px; list-style: none; margin: 0; padding: 0; }
+  .obs-footer-links a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  .obs-footer-links a:hover { color: var(--ink); }
+  .obs-footer-copy { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="obs-root">
+
+  <nav class="obs-nav">
+    <div class="obs-nav-inner">
+      <a class="obs-logo" href="#top">
+        <span class="obs-logo-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </span>
+        Observable
+      </a>
+      <ul class="obs-nav-links">
+        <li><a href="#platform">Platform</a></li>
+        <li><a href="#how-it-works">How it works</a></li>
+        <li><a href="#nist">NIST alignment</a></li>
+        <li><a href="#contact">Compliance</a></li>
+      </ul>
+      <div class="obs-nav-cta-wrap">
+        <a class="obs-btn obs-btn-ghost" href="/console">Sign in</a>
+        <a class="obs-btn obs-btn-primary" href="#contact">Request access</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="obs-hero" id="top">
+    <div class="obs-container">
+      <div class="obs-hero-grid">
+        <div>
+          <span class="obs-eyebrow">SaaS &amp; AI agent security</span>
+          <h1 class="obs-h1">Every AI agent in your SaaS stack, <span class="hl">accounted for</span> — not just assumed.</h1>
+          <p class="obs-lede">Observable gives agent identities real cryptographic access control, finds the AI agents and integrations no one provisioned, turns behavior into a live risk signal, and keeps a control-by-control compliance report current — continuously, not at audit time.</p>
+          <div class="obs-hero-ctas">
+            <a class="obs-btn obs-btn-primary" href="#contact">Request access</a>
+            <a class="obs-btn obs-btn-ghost" href="#platform">See the platform</a>
+          </div>
+          <p class="obs-hero-note">Agentless deployment · no agent-side install required to start discovery</p>
+        </div>
+        <div class="obs-hero-visual">
+          <div class="obs-hero-visual-head">
+            <span class="obs-hero-visual-title">Observable — live posture</span>
+            <span class="obs-hero-dot-row" aria-hidden="true">
+              <span class="obs-hero-dot"></span><span class="obs-hero-dot"></span><span class="obs-hero-dot"></span>
+            </span>
+          </div>
+          <div class="obs-kpi-grid">
+            <div class="obs-kpi-tile accent">
+              <div class="lbl">Agents enrolled</div>
+              <div class="val">[N]</div>
+              <div class="sub">Identity-bound, PoP tokens</div>
+            </div>
+            <div class="obs-kpi-tile warn">
+              <div class="lbl">Shadow AI found</div>
+              <div class="val">[N]</div>
+              <div class="sub">Unenrolled SaaS integrations</div>
+            </div>
+            <div class="obs-kpi-tile measure">
+              <div class="lbl">Baseline coverage</div>
+              <div class="val">[N]%</div>
+              <div class="sub">Behavior-profiled agents</div>
+            </div>
+            <div class="obs-kpi-tile ok">
+              <div class="lbl">Compliance</div>
+              <div class="val">PASS</div>
+              <div class="sub">NIST AI RMF · live</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="obs-section obs-section-alt">
+    <div class="obs-container">
+      <div class="obs-section-head">
+        <p class="obs-kicker">The problem</p>
+        <h2 class="obs-h2">Agents don't fail the way apps fail.</h2>
+        <p class="obs-section-sub">Most security stacks were built to watch people click through a browser. AI agents call APIs directly, at machine speed, with credentials that outlive any one task — and that's exactly where the blind spots are.</p>
+      </div>
+      <div class="obs-cols-3">
+        <div class="obs-problem-card">
+          <div class="obs-problem-num">01</div>
+          <h3>Shadow AI inside trusted SaaS tenants</h3>
+          <p>Employees and teams connect AI copilots, plug-ins and automation bots straight into SaaS apps — outside any provisioning process, invisible to existing IAM and CASB tools.</p>
+        </div>
+        <div class="obs-problem-card">
+          <div class="obs-problem-num">02</div>
+          <h3>Bearer tokens don't prove who's calling</h3>
+          <p>A static API key or long-lived OAuth token can be replayed from anywhere. Without proof-of-possession, "authenticated" doesn't mean "the agent you think it is."</p>
+        </div>
+        <div class="obs-problem-card">
+          <div class="obs-problem-num">03</div>
+          <h3>Compliance as a snapshot, not a state</h3>
+          <p>A point-in-time audit says nothing about the agent that got a new grant, or started behaving differently, the day after the report shipped.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="obs-section" id="platform">
+    <div class="obs-container">
+      <div class="obs-section-head">
+        <p class="obs-kicker">The platform</p>
+        <h2 class="obs-h2">Four planes, one control point.</h2>
+        <p class="obs-section-sub">Observable's agentless architecture layers identity, discovery, behavior and compliance over the SaaS and AI agents you already run — with a single place to see and act on all of it.</p>
+      </div>
+      <div class="obs-cols-4">
+        <div class="obs-plane-card">
+          <span class="obs-plane-icon" style="background:rgba(44,95,224,0.12)" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 3.8 9 9 10 5.2-1 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
+          </span>
+          <span class="obs-plane-tag">Agent Guard</span>
+          <h3>Strong identity for every agent</h3>
+          <p>Certificate-bound identities and proof-of-possession tokens replace bearer credentials, so a stolen token alone can't impersonate an agent.</p>
+        </div>
+        <div class="obs-plane-card">
+          <span class="obs-plane-icon" style="background:rgba(14,143,163,0.12)" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v3l2 2"/></svg>
+          </span>
+          <span class="obs-plane-tag">Inventory &amp; Posture</span>
+          <h3>Find what you didn't provision</h3>
+          <p>Agentless SaaS scanning surfaces shadow-AI integrations and posture gaps — stale admin accounts, missing MFA, over-broad agent grants — and tracks drift as it happens.</p>
+        </div>
+        <div class="obs-plane-card">
+          <span class="obs-plane-icon" style="background:rgba(124,92,252,0.12)" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--measure)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+          </span>
+          <span class="obs-plane-tag">Detection</span>
+          <h3>Risk scored from real behavior</h3>
+          <p>A learned behavioral baseline per agent turns anomalies — not manually written rules — into a live risk score, catching a hijacked session mid-burst.</p>
+        </div>
+        <div class="obs-plane-card">
+          <span class="obs-plane-icon" style="background:rgba(154,100,0,0.12)" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.5 11 15l4-5"/><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6"/></svg>
+          </span>
+          <span class="obs-plane-tag">Compliance &amp; Export</span>
+          <h3>Prove it, continuously</h3>
+          <p>A control-by-control compliance report regenerates from live state, with CEF/JSON audit export and SOAR-ready incident records for your existing SIEM/SOAR.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="obs-section obs-section-dark" id="nist">
+    <div class="obs-container">
+      <div class="obs-nist-wrap">
+        <div>
+          <p class="obs-kicker">Framework alignment</p>
+          <h2 class="obs-h2">Mapped to the NIST AI RMF, not just labeled with it.</h2>
+          <p class="obs-section-sub">Observable's four planes sit on the NIST AI Risk Management Framework's own structure: GOVERN wraps the cycle as a cross-cutting function, while MAP, MEASURE and MANAGE run as a continuous loop underneath it.</p>
+          <ul class="obs-nist-legend">
+            <li><span class="obs-nist-sw" style="background:var(--accent-light)"></span><span><b style="color:#fff">MAP</b> — Inventory &amp; Posture discovers what exists and characterizes impact.</span></li>
+            <li><span class="obs-nist-sw" style="background:var(--measure-light)"></span><span><b style="color:#fff">MEASURE</b> — Detection quantifies risk from behavior, continuously.</span></li>
+            <li><span class="obs-nist-sw" style="background:var(--warn-light)"></span><span><b style="color:#fff">MANAGE</b> — Agent Guard acts: policy decisions, containment, revocation.</span></li>
+            <li><span class="obs-nist-sw" style="background:var(--accent-light)"></span><span><b style="color:#fff">GOVERN</b> — Compliance &amp; Export reads and reports on all three, live.</span></li>
+          </ul>
+        </div>
+        <div class="obs-nist-diagram">
+          <div class="obs-nist-hub">
+            <div class="t">Govern</div>
+            <div class="n">Compliance &amp; Export</div>
+          </div>
+          <div class="obs-nist-cycle-row">
+            <div class="obs-nist-chip">
+              <div class="k">MAP</div>
+              <div class="n">Inventory &amp; Posture</div>
+              <div class="p">Discover agents &amp; findings</div>
+            </div>
+            <div class="obs-nist-arrow" aria-hidden="true">→</div>
+            <div class="obs-nist-chip m2">
+              <div class="k">MEASURE</div>
+              <div class="n">Detection</div>
+              <div class="p">Quantify risk from behavior</div>
+            </div>
+            <div class="obs-nist-arrow" aria-hidden="true">→</div>
+            <div class="obs-nist-chip m3">
+              <div class="k">MANAGE</div>
+              <div class="n">Agent Guard</div>
+              <div class="p">Decide, contain, revoke</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="obs-section" id="how-it-works">
+    <div class="obs-container">
+      <div class="obs-section-head">
+        <p class="obs-kicker">How it works</p>
+        <h2 class="obs-h2">From unknown to governed.</h2>
+        <p class="obs-section-sub">A straight path from "we don't know what's out there" to a live, provable control point.</p>
+      </div>
+      <div class="obs-steps">
+        <div class="obs-step-card">
+          <div class="obs-step-num">1</div>
+          <h3>Connect</h3>
+          <p>Agentless setup against your SaaS tenants — no agent-side install required to begin discovery.</p>
+        </div>
+        <div class="obs-step-card">
+          <div class="obs-step-num">2</div>
+          <h3>Discover</h3>
+          <p>Observable inventories every AI agent and integration, flags shadow AI, and surfaces posture findings.</p>
+        </div>
+        <div class="obs-step-card">
+          <div class="obs-step-num">3</div>
+          <h3>Enforce</h3>
+          <p>Bring agents onto identity-bound, proof-of-possession access, with behavior-based risk scoring live underneath.</p>
+        </div>
+        <div class="obs-step-card">
+          <div class="obs-step-num">4</div>
+          <h3>Prove</h3>
+          <p>A live, control-by-control compliance report and SIEM/SOAR-ready exports — current whenever someone asks.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="obs-section obs-section-dark obs-cta-band">
+    <div class="obs-container">
+      <h2 class="obs-h2">See what's already running in your SaaS stack.</h2>
+      <p>A short working session against a read-only connection to one of your SaaS tenants — no changes made, just a real inventory.</p>
+      <div class="obs-hero-ctas">
+        <a class="obs-btn obs-btn-on-dark" href="#contact">Request access</a>
+        <a class="obs-btn obs-btn-ghost-on-dark" href="#platform">Review the platform again</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="obs-section" id="contact">
+    <div class="obs-container">
+      <div class="obs-contact-grid">
+        <div>
+          <p class="obs-kicker">Get in touch</p>
+          <h2 class="obs-h2">Talk to the team building Observable.</h2>
+          <p class="obs-section-sub">Tell us which SaaS apps and AI agents you want visibility into first. We'll follow up to set up a read-only discovery session.</p>
+        </div>
+        <div class="obs-contact-card">
+          <div class="obs-contact-row">
+            <span class="k">Email</span>
+            <span class="v">[YOUR CONTACT EMAIL]</span>
+          </div>
+          <div class="obs-contact-row">
+            <span class="k">Company</span>
+            <span class="v">[YOUR COMPANY NAME]</span>
+          </div>
+          <div class="obs-contact-row">
+            <span class="k">Response time</span>
+            <span class="v">[YOUR TYPICAL RESPONSE TIME]</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="obs-footer">
+    <div class="obs-container obs-footer-inner">
+      <span class="obs-footer-copy">© <span class="mono">2026</span> Observable. All rights reserved.</span>
+      <ul class="obs-footer-links">
+        <li><a href="#platform">Platform</a></li>
+        <li><a href="#nist">NIST alignment</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

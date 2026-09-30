@@ -174,10 +174,17 @@ def test_console_page_served_same_origin(client):
     assert "Observable Console" in resp.text
 
 
-def test_root_redirects_to_console(client):
-    resp = client.get("/", follow_redirects=False)
-    assert resp.status_code in (302, 307)
-    assert resp.headers["location"] == "/console"
+def test_root_serves_landing_page(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "<!doctype html>" in resp.text.lower()
+    assert "Observable" in resp.text
+    assert "SaaS" in resp.text
+    # The console stays reachable at its own path; root no longer
+    # redirects to it now that it serves the marketing page instead.
+    console_resp = client.get("/console")
+    assert console_resp.status_code == 200
 
 
 def test_list_agents_endpoint_empty_by_default(client):

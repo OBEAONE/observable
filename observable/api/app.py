@@ -34,7 +34,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from observable.api.models import (
     AgentIdentityResponse,
@@ -120,6 +120,7 @@ def get_state() -> AppState:
 # than hosted separately.
 # ----------------------------------------------------------------------
 _CONSOLE_HTML_PATH = Path(__file__).parent / "static" / "console.html"
+_LANDING_HTML_PATH = Path(__file__).parent / "static" / "landing.html"
 
 
 @app.get("/console", response_class=HTMLResponse)
@@ -139,9 +140,17 @@ def console_page() -> HTMLResponse:
     return HTMLResponse(content=wrapped)
 
 
-@app.get("/", include_in_schema=False)
-def root_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/console")
+# ----------------------------------------------------------------------
+# Marketing landing page — served same-origin at the root path, so the
+# same Render deployment (and, once DNS is pointed at it, the same
+# observable24.com domain) carries both the public-facing page and the
+# read-only console below it. landing.html is a complete, self-contained
+# document (own <!doctype>/<head>), unlike console.html's fragment above.
+# ----------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def landing_page() -> HTMLResponse:
+    raw = _LANDING_HTML_PATH.read_text(encoding="utf-8")
+    return HTMLResponse(content=raw)
 
 
 @dataclasses.dataclass(frozen=True)

@@ -34,7 +34,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from observable.api.models import (
     AgentIdentityResponse,
@@ -121,6 +121,31 @@ def get_state() -> AppState:
 # ----------------------------------------------------------------------
 _CONSOLE_HTML_PATH = Path(__file__).parent / "static" / "console.html"
 _LANDING_HTML_PATH = Path(__file__).parent / "static" / "landing.html"
+_ICONS_DIR = Path(__file__).parent / "static" / "icons"
+_ICON_MEDIA_TYPES = {
+    "favicon.ico": "image/x-icon",
+    "favicon-16x16.png": "image/png",
+    "favicon-32x32.png": "image/png",
+    "apple-touch-icon.png": "image/png",
+}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    # Browsers request this exact root-level path by default, independent
+    # of any <link rel="icon"> tag in the served HTML.
+    data = (_ICONS_DIR / "favicon.ico").read_bytes()
+    return Response(content=data, media_type="image/x-icon")
+
+
+@app.get("/icons/{filename}", include_in_schema=False)
+def icon_asset(filename: str) -> Response:
+    # Allowlisted by exact filename (no path traversal via user input).
+    media_type = _ICON_MEDIA_TYPES.get(filename)
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="unknown icon asset")
+    data = (_ICONS_DIR / filename).read_bytes()
+    return Response(content=data, media_type=media_type)
 
 
 @app.get("/console", response_class=HTMLResponse)
@@ -135,6 +160,10 @@ def console_page() -> HTMLResponse:
         "<!doctype html>\n<html lang=\"en\">\n<head>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<link rel="icon" href="/favicon.ico" sizes="any">\n'
+        '<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png">\n'
+        '<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png">\n'
+        '<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">\n'
         "</head>\n<body>\n" + raw + "\n</body>\n</html>\n"
     )
     return HTMLResponse(content=wrapped)

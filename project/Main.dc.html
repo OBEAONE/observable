@@ -2,19 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Observable — SaaS &amp; AI Agent Security</title>
-<meta name="description" content="Observable gives AI agents strong identity, finds shadow AI in your SaaS stack, scores risk from real behavior, and keeps a live, control-by-control compliance report.">
-<link rel="icon" href="/favicon.ico" sizes="any">
-<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png">
-<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
 <style>
   :root {
-    --accent: #D81E24;
+    --accent: {{accent}};
     --accent-light: #FF5A54;
     --teal: #64748B;
     --teal-light: #A7B0BE;
@@ -36,9 +35,8 @@
 
   * { box-sizing: border-box; }
 
-  html, body { margin: 0; padding: 0; }
-
-  body {
+  .obs-root {
+    margin: 0;
     font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
     color: var(--ink);
     background: var(--paper);
@@ -48,7 +46,7 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  code, .mono { font-family: "IBM Plex Mono", monospace; }
+  .obs-root code, .obs-root .mono { font-family: "IBM Plex Mono", monospace; }
 
   .obs-container {
     max-width: 1180px;
@@ -441,8 +439,8 @@
   .obs-footer-brand-name { font-weight: 700; font-size: 13.5px; color: var(--ink); }
   .obs-footer-tagline { font-size: 11.5px; color: var(--muted); letter-spacing: 0.01em; }
 </style>
-</head>
-<body>
+</helmet>
+
 <div class="obs-root">
 
   <nav class="obs-nav">
@@ -717,5 +715,15 @@
   </footer>
 
 </div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"type":"color","label":"Accent color","default":"#D81E24"}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent || "#D81E24"
+    };
+  }
+}
+</script>
 </body>
 </html>

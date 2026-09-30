@@ -4,36 +4,40 @@
 :root{
   --bg:#F4F6F9; --surface:#FFFFFF; --surface-2:#ECF0F5; --border:#DAE1EA;
   --text:#141C2B; --text-muted:#5B6576; --text-faint:#8791A2;
-  --accent:#2C5FE0; --accent-soft:#E8EEFD; --accent-2:#0E8FA3;
+  --accent:#D81E24; --accent-soft:#FBE7E7; --accent-2:#64748B;
   --ok:#187A4F; --ok-soft:#E4F5EC;
   --warn:#9A6400; --warn-soft:#FCF1DB;
   --critical:#C43132; --critical-soft:#FBE7E6;
   --na:#5B6576; --na-soft:#EAEDF2;
-  --plane-measure:#7C5CFC;
+  --plane-measure:#94A3B3;
+  --plane-manage:#3F4750;
+  --brand-red-1:#F2231D; --brand-red-2:#D10F1A;
   --shadow: 0 1px 2px rgba(20,28,43,.05), 0 4px 16px rgba(20,28,43,.06);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --bg:#0B0F17; --surface:#121826; --surface-2:#1A2233; --border:#2A3348;
     --text:#E7EBF3; --text-muted:#9AA5BA; --text-faint:#69748A;
-    --accent:#6C93FF; --accent-soft:#1B2745; --accent-2:#3FC1D6;
+    --accent:#FF5A54; --accent-soft:#34181A; --accent-2:#A7B0BE;
     --ok:#4FD394; --ok-soft:#123024;
     --warn:#F0B429; --warn-soft:#332608;
     --critical:#FF6B6A; --critical-soft:#3A1717;
     --na:#8792A6; --na-soft:#1D2434;
-    --plane-measure:#A78BFA;
+    --plane-measure:#C7CED8;
+    --plane-manage:#6B7280;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
   }
 }
 :root[data-theme="dark"]{
   --bg:#0B0F17; --surface:#121826; --surface-2:#1A2233; --border:#2A3348;
   --text:#E7EBF3; --text-muted:#9AA5BA; --text-faint:#69748A;
-  --accent:#6C93FF; --accent-soft:#1B2745; --accent-2:#3FC1D6;
+  --accent:#FF5A54; --accent-soft:#34181A; --accent-2:#A7B0BE;
   --ok:#4FD394; --ok-soft:#123024;
   --warn:#F0B429; --warn-soft:#332608;
   --critical:#FF6B6A; --critical-soft:#3A1717;
   --na:#8792A6; --na-soft:#1D2434;
-  --plane-measure:#A78BFA;
+  --plane-measure:#C7CED8;
+  --plane-manage:#6B7280;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
 }
 
@@ -57,7 +61,8 @@ button{font:inherit; cursor:pointer}
 }
 .brand{display:flex; align-items:center; gap:10px; padding:0 8px 18px; margin-bottom:6px; border-bottom:1px solid var(--border)}
 .brand-mark{
-  width:30px; height:30px; border-radius:8px; background:var(--accent); flex:0 0 30px;
+  width:30px; height:30px; border-radius:8px; flex:0 0 30px;
+  background:linear-gradient(135deg, var(--brand-red-1), var(--brand-red-2));
   display:flex; align-items:center; justify-content:center;
 }
 .brand-mark svg{width:17px; height:17px}
@@ -277,7 +282,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
   <nav class="sidebar">
     <div class="brand">
       <div class="brand-mark">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L4 5v6c0 5.2 3.4 9.4 8 11 4.6-1.6 8-5.8 8-11V5l-8-3z" fill="#fff" opacity=".95"/><path d="M9 12.2l2 2 4-4.4" stroke="#2C5FE0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r="1.15" fill="#fff" stroke="none"/></svg>
       </div>
       <div class="brand-text"><b>Observable</b><span>Console</span></div>
     </div>
@@ -341,7 +346,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
         <div class="card-head"><h2>Agent activity map</h2><span class="meta" id="activityMapMeta"></span></div>
         <div class="card-body" id="activityMapBody" style="overflow-x:auto"></div>
         <div class="activity-legend">
-          <span><i class="dot-key" style="background:var(--accent)"></i> allowed calls</span>
+          <span><i class="dot-key" style="background:var(--accent-2)"></i> allowed calls</span>
           <span><i class="dot-key" style="background:var(--critical)"></i> includes denied calls</span>
           <span class="hint">Line thickness = call volume · click an agent to view its PKI identity</span>
         </div>
@@ -731,7 +736,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       sub: function(){ return state.agents.length + " agent(s) monitored"; }
     },
     {
-      phase: "MANAGE", startDeg: 240, endDeg: 360, color: "var(--warn)",
+      phase: "MANAGE", startDeg: 240, endDeg: 360, color: "var(--plane-manage)",
       plane: "Agent Guard (§1-6)", view: "incidents",
       kpi: function(){ return state.incidents.filter(function(i){return i.status==="open";}).length + " open"; },
       sub: function(){ return state.incidents.length + " containment event(s) total"; }
@@ -801,7 +806,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
         '<div class="nist-legend-row"><span class="sw" style="background:var(--accent-2)"></span><div><b>GOVERN</b> — Compliance &amp; Export (§9). Cross-cutting: reads and reports on the other three, live. Click the center.</div></div>' +
         '<div class="nist-legend-row"><span class="sw" style="background:var(--accent)"></span><div><b>MAP</b> — Inventory &amp; Posture (§7). Discovers what SaaS apps/agents exist and characterizes impact.</div></div>' +
         '<div class="nist-legend-row"><span class="sw" style="background:var(--plane-measure)"></span><div><b>MEASURE</b> — Detection (§8). Behavioral baselining + intent-conformance quantify risk.</div></div>' +
-        '<div class="nist-legend-row"><span class="sw" style="background:var(--warn)"></span><div><b>MANAGE</b> — Agent Guard (§1-6). Policy decision, containment, revocation act on that risk.</div></div>' +
+        '<div class="nist-legend-row"><span class="sw" style="background:var(--plane-manage)"></span><div><b>MANAGE</b> — Agent Guard (§1-6). Policy decision, containment, revocation act on that risk.</div></div>' +
         '<div class="nist-legend-note">Cycle runs MAP → MEASURE → MANAGE, back to MAP — click any block to open that plane’s tab.</div>' +
       "</div>";
 
@@ -858,7 +863,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       var y1 = agentY[a.agent_id], y2 = toolY[e.tool];
       var x1 = leftX, x2 = rightX, mx = (x1 + x2) / 2;
       var denied = e.deny > 0;
-      var stroke = denied ? "var(--critical)" : "var(--accent)";
+      var stroke = denied ? "var(--critical)" : "var(--accent-2)";
       var w = 1.4 + 3.4 * (e.count / maxCount);
       var op = denied ? 0.85 : (0.35 + 0.5 * (e.count / maxCount));
       var title = esc(a.display_name) + " → " + esc(e.tool) + ": " + e.count + " call(s)" +

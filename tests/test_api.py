@@ -187,6 +187,46 @@ def test_root_serves_landing_page(client):
     assert console_resp.status_code == 200
 
 
+def test_favicon_ico_served_at_root_path(client):
+    resp = client.get("/favicon.ico")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/x-icon"
+    assert len(resp.content) > 0
+
+
+def test_icon_assets_served_for_known_filenames(client):
+    for filename, content_type in [
+        ("favicon-16x16.png", "image/png"),
+        ("favicon-32x32.png", "image/png"),
+        ("apple-touch-icon.png", "image/png"),
+        ("favicon.ico", "image/x-icon"),
+    ]:
+        resp = client.get(f"/icons/{filename}")
+        assert resp.status_code == 200, filename
+        assert resp.headers["content-type"] == content_type
+        assert len(resp.content) > 0
+
+
+def test_icon_asset_rejects_unknown_filename(client):
+    resp = client.get("/icons/../app.py")
+    assert resp.status_code in (404, 307)  # 307 if Starlette normalizes the path first
+    resp2 = client.get("/icons/not-a-real-icon.png")
+    assert resp2.status_code == 404
+
+
+def test_landing_page_links_favicon_tags(client):
+    resp = client.get("/")
+    assert 'rel="icon" href="/favicon.ico"' in resp.text
+    assert "/icons/favicon-32x32.png" in resp.text
+    assert "/icons/apple-touch-icon.png" in resp.text
+
+
+def test_console_page_links_favicon_tags(client):
+    resp = client.get("/console")
+    assert 'rel="icon" href="/favicon.ico"' in resp.text
+    assert "/icons/favicon-32x32.png" in resp.text
+
+
 def test_list_agents_endpoint_empty_by_default(client):
     resp = client.get("/agents")
     assert resp.status_code == 200

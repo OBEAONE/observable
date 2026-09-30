@@ -768,6 +768,35 @@ and the read-only console (still at `/console`, unchanged). `GET /`
 previously redirected to `/console`; that redirect is gone now that
 root has its own page.
 
+### Brand identity: favicon and the red/grey palette
+
+Both `/` and `/console` link a shared favicon (`static/icons/`:
+`favicon.ico`, 16×16, 32×32, and a 180×180 Apple touch icon) built from
+Observable's eye-mark logo, served via two dedicated routes
+(`GET /favicon.ico` — the path browsers request by default regardless
+of any `<link>` tag — and `GET /icons/{filename}`, allowlisted by exact
+filename). The same logo (icon + "Observable" wordmark, plus the
+tagline "Observe. Understand. Act." in the landing page's footer) also
+replaces the console's previous shield glyph in the sidebar brand mark.
+
+The UI's accent palette shifted from the original blue/teal/violet/amber
+mix to a red/grey identity matching the logo: `--brand-red-1`/`-2` are
+the logo's own fixed gradient stops (used only for the mark itself,
+independent of theme); `--accent` (console) and `--accent`/`--accent-light`
+(landing page) are the red functional accent (buttons, nav, the MAP
+plane); `--accent-2`, `--plane-measure`, and the new `--plane-manage`
+token are grey/charcoal shades covering the MEASURE and MANAGE planes
+and the console's secondary UI. The semantic status colors
+(`--ok`/`--warn`/`--critical`/`--na` — pass/partial/fail/not-applicable)
+are deliberately untouched: they carry real compliance meaning and
+`--warn`'s amber stayed reserved for "partial" status rather than being
+repainted into the brand palette. One direct consequence: the console's
+audit "agent activity map" previously colored *allowed* calls with the
+same blue as everything else and *denied* calls with `--critical`
+(red); now that the functional accent is also red, *allowed* calls were
+switched to `--accent-2` (grey) so allowed-vs-denied stays visually
+distinct instead of both reading as shades of red.
+
 ### What v1.5 does *not* do
 
 No feedback/appeal channel itself (MEASURE 3.3 names the gap; closing

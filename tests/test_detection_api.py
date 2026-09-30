@@ -50,6 +50,34 @@ def test_baseline_endpoint_reflects_activity(client):
     assert body["recent_decision_count"] == 2
 
 
+def test_risk_history_endpoint_reflects_scored_activity(client):
+    agent = AgentClient.enroll(
+        http=client, display_name="det-agent-4", role="sales-assistant", tier="foundation", enrolled_by="omar"
+    )
+    token = agent.request_token(["tool:crm.read"])
+    agent.invoke(token, tool_name="crm.read", payload={}, resource_id="A-1")
+    agent.invoke(token, tool_name="crm.read", payload={}, resource_id="A-2")
+
+    resp = client.get("/detection/risk-history")
+    assert resp.status_code == 200
+    body = resp.json()
+    entry = next(a for a in body["agents"] if a["agent_id"] == agent.agent_id)
+    assert entry["display_name"] == "det-agent-4"
+    assert entry["role"] == "sales-assistant"
+    assert entry["status"] == "active"
+    assert len(entry["points"]) == 2
+    assert all(set(p.keys()) == {"t", "risk_score"} for p in entry["points"])
+
+
+def test_risk_history_endpoint_omits_agents_never_scored(client):
+    agent = AgentClient.enroll(
+        http=client, display_name="det-agent-5", role="sales-assistant", tier="foundation", enrolled_by="omar"
+    )
+    resp = client.get("/detection/risk-history")
+    ids = [a["agent_id"] for a in resp.json()["agents"]]
+    assert agent.agent_id not in ids
+
+
 def test_setting_and_clearing_auto_contain_threshold(client):
     resp = client.post("/admin/detection/threshold", json={"threshold": 0.05})
     assert resp.status_code == 200

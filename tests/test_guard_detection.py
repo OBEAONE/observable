@@ -211,6 +211,52 @@ def test_constructing_guard_with_threshold_but_no_detection_raises(registry, tok
         )
 
 
+def test_invoke_records_a_risk_history_sample_regardless_of_outcome(registry, token_service, policy_engine):
+    detection = DetectionEngine(sensitivity_lookup=policy_engine)
+    guard = AgentGuard(
+        registry=registry, token_service=token_service, policy_engine=policy_engine, detection=detection
+    )
+    guard.register_tool("crm.read", lambda p, r: {"ok": True})
+    enrollment = _enroll(registry)
+    token = token_service.mint(
+        client_cert_pem=enrollment.certificate.certificate_pem, requested_scopes=["tool:crm.read"]
+    )
+    guard.invoke(
+        client_cert_pem=enrollment.certificate.certificate_pem,
+        token=token.jwt,
+        tool_name="crm.read",
+        payload={},
+        resource_id="A-1",
+    )
+    history = detection.risk_history(enrollment.record.agent_id)
+    assert len(history) == 1
+    assert history[0]["risk_score"] > 0.0  # the same first-time-use signal asserted above
+
+
+def test_denied_call_still_records_a_risk_history_sample(registry, token_service, policy_engine):
+    # A call denied for a reason that has nothing to do with detection
+    # (no registered invoker) still gets scored at step 2.5 before that
+    # denial happens -- exactly the kind of spike the risk-history chart
+    # exists to surface, not something that should go missing from it.
+    detection = DetectionEngine(sensitivity_lookup=policy_engine)
+    guard = AgentGuard(
+        registry=registry, token_service=token_service, policy_engine=policy_engine, detection=detection
+    )
+    enrollment = _enroll(registry)
+    token = token_service.mint(
+        client_cert_pem=enrollment.certificate.certificate_pem, requested_scopes=["tool:crm.read"]
+    )
+    with pytest.raises(GuardDeniedError):
+        guard.invoke(
+            client_cert_pem=enrollment.certificate.certificate_pem,
+            token=token.jwt,
+            tool_name="crm.read",
+            payload={},
+        )
+    history = detection.risk_history(enrollment.record.agent_id)
+    assert len(history) == 1
+
+
 def test_denied_attempts_feed_deny_rate_signal(registry, token_service, policy_engine):
     detection = DetectionEngine(sensitivity_lookup=policy_engine)
     guard = AgentGuard(

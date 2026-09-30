@@ -38,6 +38,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from observable.api.models import (
     AgentIdentityResponse,
+    AgentRiskHistoryResponse,
     AgentStatusResponse,
     AgentSummary,
     AppSummary,
@@ -59,6 +60,7 @@ from observable.api.models import (
     InvokeRequest,
     InvokeResponse,
     PostureFindingResponse,
+    RiskHistoryResponse,
     ScanRequest,
     ScanResultItem,
     ShadowFindingResponse,
@@ -572,6 +574,38 @@ def inventory_posture(state: AppState = Depends(get_state)) -> list[PostureFindi
         )
         for f in findings
     ]
+
+
+@app.get("/detection/risk-history", response_model=RiskHistoryResponse)
+def detection_risk_history(state: AppState = Depends(get_state)) -> RiskHistoryResponse:
+    """Every enrolled agent's (timestamp, risk_score) series, oldest
+    first per agent — one call for the console's "Agents risk score"
+    chart (§8) instead of one round trip per agent. Only agents the
+    Detection Engine has actually scored at least once appear; a
+    just-enrolled agent that has never called a tool is omitted rather
+    than shown with an empty series.
+
+    Registered ABOVE the "/detection/{agent_id}" route below: a
+    parameterized path segment matches "risk-history" just like any
+    other agent_id, so the more specific literal route has to come
+    first or this endpoint is unreachable."""
+    histories = state.detection.all_risk_histories()
+    agents_by_id = {r.agent_id: r for r in state.registry.list_agents()}
+    agents = []
+    for agent_id, points in histories.items():
+        if not points:
+            continue
+        record = agents_by_id.get(agent_id)
+        agents.append(
+            AgentRiskHistoryResponse(
+                agent_id=agent_id,
+                display_name=record.display_name if record else agent_id,
+                role=record.role if record else "unknown",
+                status=record.status.value if record else "unknown",
+                points=points,
+            )
+        )
+    return RiskHistoryResponse(agents=agents)
 
 
 @app.get("/detection/{agent_id}", response_model=BaselineSummaryResponse)

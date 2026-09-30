@@ -807,6 +807,67 @@ instance can meaningfully probe live, in the same spirit as §9.1's
 durable persistence for the Impact Register (re-seeded on restart, like
 every other in-memory store in this reference deployment).
 
+## 9.6 Agents risk score over time (v1.6)
+
+§8's Detection Engine always computed a live `risk_score` per call, but
+nothing kept a *history* of it — the Detection tab (§8) only ever showed
+the current baseline snapshot. This adds a per-agent time series of
+every scored `risk_score`, purely on top of the existing statistical
+engine (no CLM/model-derived signal, §8.5, is involved).
+
+**Storage.** `AgentBehaviorBaseline` gets a new `risk_history: deque[(timestamp,
+risk_score)]` field, bounded by count (`maxlen=500`) rather than the
+1-hour wall-clock window `_prune()` uses for the other deques (§8.3) —
+a chart of "how has this agent trended" should not silently lose its
+oldest points just because they've aged past an hour. `DetectionEngine.record_risk_score()`
+appends to it; `risk_history()`/`all_risk_histories()` read it back as
+plain `{"t": iso8601, "risk_score": float}` dicts, per-agent or for
+every agent that's been scored at least once.
+
+**Wiring.** `AgentGuard.invoke()` calls `record_risk_score()` immediately
+after step 2.5's `pre_score()` (§6's request-flow numbering) — the same
+place §8 already computes the live score, so every scored call gets a
+sample regardless of what happens next: allowed, denied for an
+unrelated ABAC/policy reason, or auto-contained. The tamper-evident
+Audit Chain (§3, §6) is deliberately untouched: this is a lightweight,
+in-memory, best-effort series for a dashboard chart, not a security
+record, so it doesn't belong in the hash-linked, signed chain.
+
+**API.** `GET /detection/risk-history` returns every scored agent's
+series in one response — `{"agents": [{agent_id, display_name, role,
+status, points: [{t, risk_score}, ...]}, ...]}` — rather than one round
+trip per agent. It's registered *above* the existing parameterized
+`GET /detection/{agent_id}` route (§8), not below: FastAPI/Starlette
+matches routes in registration order, and a literal `/detection/risk-history`
+after a wildcard `/detection/{agent_id}` would be swallowed by it
+(`agent_id="risk-history"`) and never reached.
+
+**Console.** A new "Agents risk score" tab (`console.html`) — a left-nav
+button alongside Detection and Incidents — renders every agent's series
+as a hand-rolled SVG multi-line chart (same inline-SVG approach as the
+NIST cycle ring and the activity map, §9.4/Overview): x is wall-clock
+time, y is `risk_score` (0–1, gridlines at quarters), one polyline per
+agent in a dedicated qualitative palette (`--chart-1`..`--chart-8`,
+defined per theme) chosen specifically *not* to reuse the semantic
+`--ok`/`--warn`/`--critical`/`--na` status colors, since a chart-line's
+color here means "which agent," not "pass/fail." The legend below the
+chart restates each agent's latest score, colored by that semantic
+scale instead (≥0.6 critical, ≥0.3 warn, else ok) — so the same number
+means agent-identity in the line and risk-level in the legend, without
+conflating the two palettes.
+
+### What v1.6 does *not* do
+
+No way to zoom, pan, or filter to a time window — the chart always
+plots everything currently retained (up to 500 points/agent). No
+threshold/auto-contain reference line drawn on the chart itself (§8's
+`/admin/detection/threshold` value isn't visualized here, only enforced
+live). No historical backfill from the Audit Chain on restart — unlike
+`ingest_from_audit()` for the baseline's other state (§8.3), a fresh
+process starts every agent's risk history empty, since no `risk_score`
+field exists on `AuditEntry` to replay from (and adding one was
+deliberately ruled out above, to keep the audit schema unchanged).
+
 ---
 
 ## 10. Directory layout (code delivered with this document)

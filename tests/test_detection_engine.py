@@ -63,6 +63,31 @@ def test_baseline_summary_known_agent_reports_stats():
     assert summary["recent_deny_count"] == 1
 
 
+def test_risk_history_empty_for_unknown_agent():
+    engine = DetectionEngine()
+    assert engine.risk_history("nope") == []
+
+
+def test_record_risk_score_then_risk_history_reflects_it():
+    engine = DetectionEngine()
+    engine.record_risk_score(agent_id="a1", risk_score=0.2, timestamp=T0)
+    engine.record_risk_score(agent_id="a1", risk_score=0.6, timestamp=_at(10))
+    history = engine.risk_history("a1")
+    assert history == [
+        {"t": T0.isoformat(), "risk_score": 0.2},
+        {"t": _at(10).isoformat(), "risk_score": 0.6},
+    ]
+
+
+def test_all_risk_histories_covers_every_scored_agent():
+    engine = DetectionEngine()
+    engine.record_risk_score(agent_id="a1", risk_score=0.1, timestamp=T0)
+    engine.record_risk_score(agent_id="a2", risk_score=0.3, timestamp=T0)
+    all_histories = engine.all_risk_histories()
+    assert set(all_histories.keys()) == {"a1", "a2"}
+    assert all_histories["a1"] == [{"t": T0.isoformat(), "risk_score": 0.1}]
+
+
 def test_ingest_from_audit_backfills_baseline():
     audit = AuditChain()
     audit.append(agent_id="a1", role="sales-assistant", action="tool:crm.read", decision="allow", reason="ok")

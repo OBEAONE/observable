@@ -55,6 +55,16 @@ class AgentBehaviorBaseline:
     # conformance signal (§8.5) can ask "what has this agent actually
     # been doing lately" without the scorer needing its own history.
     recent_tool_calls: deque[tuple[dt.datetime, str, str]] = dataclasses.field(default_factory=deque)
+    # (timestamp, risk_score) for every *scored* event, regardless of the
+    # eventual allow/deny outcome — exists purely so an operator can chart
+    # how an agent's live risk_score evolved (the console's "Agents risk
+    # score" tab), not to feed any scoring signal itself. Bounded by
+    # count rather than the short time-based _prune() window below: a
+    # trend chart should keep showing history long after a burst window
+    # has expired, so this uses deque's own maxlen instead.
+    risk_history: deque[tuple[dt.datetime, float]] = dataclasses.field(
+        default_factory=lambda: deque(maxlen=500)
+    )
 
     @property
     def interval_mean(self) -> float:
@@ -94,6 +104,14 @@ class AgentBehaviorBaseline:
         self.recent_decisions.append((timestamp, decision))
         self.recent_tool_calls.append((timestamp, tool, decision))
         self._prune(timestamp)
+
+    def record_risk_score(self, *, timestamp: dt.datetime, risk_score: float) -> None:
+        """Append one (timestamp, risk_score) sample for charting.
+        Independent of record_event: call this for every *scored* event
+        (``DetectionEngine.pre_score``'s result), regardless of whether
+        it's later allowed, denied, or auto-contained — a denied burst is
+        exactly the kind of spike this chart exists to show."""
+        self.risk_history.append((timestamp, risk_score))
 
     def recent_allowed_tools(self, limit: int = 5) -> list[str]:
         """The last ``limit`` tool names this agent successfully called,

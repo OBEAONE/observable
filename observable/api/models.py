@@ -187,6 +187,23 @@ class BaselineSummaryResponse(BaseModel):
     last_event_at: Optional[str] = None
 
 
+class RiskHistoryPoint(BaseModel):
+    t: str
+    risk_score: float
+
+
+class AgentRiskHistoryResponse(BaseModel):
+    agent_id: str
+    display_name: str
+    role: str
+    status: str
+    points: list[RiskHistoryPoint]
+
+
+class RiskHistoryResponse(BaseModel):
+    agents: list[AgentRiskHistoryResponse]
+
+
 class ControlResultResponse(BaseModel):
     control_id: str
     title: str

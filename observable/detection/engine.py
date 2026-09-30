@@ -93,6 +93,37 @@ class DetectionEngine:
                 tool=tool, resource_id=resource_id, decision=decision, timestamp=timestamp
             )
 
+    def record_risk_score(self, *, agent_id: str, risk_score: float, timestamp: dt.datetime) -> None:
+        """Append one scored-event sample to this agent's risk history
+        (for the `/detection/risk-history` charting endpoint). Called
+        once per scored event, independent of `record_event` (which only
+        fires once an event's allow/deny outcome is decided) — this
+        fires the moment `pre_score` produces a risk_score, so a denied
+        or auto-contained event still shows up as a spike on the chart."""
+        with self._lock:
+            baseline = self._baseline_for(agent_id)
+            baseline.record_risk_score(timestamp=timestamp, risk_score=risk_score)
+
+    def risk_history(self, agent_id: str) -> list[dict]:
+        """JSON-friendly (timestamp, risk_score) series for one agent,
+        oldest first. Empty list for an agent with no scored events yet
+        (never enrolled-and-called, not an error)."""
+        with self._lock:
+            baseline = self._baselines.get(agent_id)
+            if baseline is None:
+                return []
+            return [
+                {"t": ts.isoformat(), "risk_score": round(score, 4)}
+                for ts, score in baseline.risk_history
+            ]
+
+    def all_risk_histories(self) -> dict[str, list[dict]]:
+        """Every agent this engine has ever scored, mapped to its risk
+        history — one call for the console's multi-agent chart instead
+        of one round trip per agent."""
+        with self._lock:
+            return {agent_id: self.risk_history(agent_id) for agent_id in self._baselines}
+
     def ingest_from_audit(self, audit: AuditChain, *, agent_id: Optional[str] = None) -> int:
         """Backfill baselines from existing audit history — useful right
         after a restart, or to warm a baseline in a demo without

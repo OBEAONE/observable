@@ -184,6 +184,13 @@ class AgentGuard:
                 role=claims.role,
                 purpose=claims.purpose,
             )
+            # Record this sample for the risk-history chart regardless of
+            # what happens next (allow, deny, or auto-contain below) — a
+            # denied/contained event is exactly the spike that chart
+            # exists to surface, not something to skip.
+            self._detection.record_risk_score(
+                agent_id=claims.agent_id, risk_score=assessment.risk_score, timestamp=now
+            )
 
         # 2.6. Automated containment: if this agent's live risk score has
         #      already crossed the operator-configured threshold, contain

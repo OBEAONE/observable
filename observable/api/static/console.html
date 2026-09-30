@@ -12,6 +12,8 @@
   --plane-measure:#94A3B3;
   --plane-manage:#3F4750;
   --brand-red-1:#F2231D; --brand-red-2:#D10F1A;
+  --chart-1:#D81E24; --chart-2:#3F4750; --chart-3:#2563EB; --chart-4:#0F9D78;
+  --chart-5:#9333EA; --chart-6:#CA8A04; --chart-7:#64748B; --chart-8:#DB2777;
   --shadow: 0 1px 2px rgba(20,28,43,.05), 0 4px 16px rgba(20,28,43,.06);
 }
 @media (prefers-color-scheme: dark){
@@ -25,6 +27,8 @@
     --na:#8792A6; --na-soft:#1D2434;
     --plane-measure:#C7CED8;
     --plane-manage:#6B7280;
+    --chart-1:#FF5A54; --chart-2:#A7B0BE; --chart-3:#60A5FA; --chart-4:#34D399;
+    --chart-5:#C084FC; --chart-6:#FBBF24; --chart-7:#94A3B3; --chart-8:#F472B6;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
   }
 }
@@ -38,6 +42,8 @@
   --na:#8792A6; --na-soft:#1D2434;
   --plane-measure:#C7CED8;
   --plane-manage:#6B7280;
+  --chart-1:#FF5A54; --chart-2:#A7B0BE; --chart-3:#60A5FA; --chart-4:#34D399;
+  --chart-5:#C084FC; --chart-6:#FBBF24; --chart-7:#94A3B3; --chart-8:#F472B6;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
 }
 
@@ -237,6 +243,12 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
 .tag-row{display:flex; flex-wrap:wrap; gap:6px; padding:14px 16px}
 .tag{font-family:"IBM Plex Mono"; font-size:11.5px; background:var(--surface-2); border:1px solid var(--border); padding:3px 8px; border-radius:6px; color:var(--text-muted)}
 
+/* ---------- risk score history (Detection) ---------- */
+.risk-chart-body{padding:16px 16px 4px}
+.risk-legend{display:flex; flex-wrap:wrap; gap:14px; padding:12px 16px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted)}
+.risk-legend span{display:inline-flex; align-items:center; gap:6px}
+.risk-legend .score{font-family:"IBM Plex Mono"; font-weight:600}
+
 /* ---------- settings modal ---------- */
 .overlay{position:fixed; inset:0; background:rgba(10,14,22,.5); display:flex; align-items:center; justify-content:center; padding:20px; z-index:50}
 .overlay[hidden]{display:none}
@@ -306,6 +318,10 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     <button class="nav-item" data-view="detection">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/><path d="M8 11h2l1.2-2.6L12.6 14 14 11h2"/></svg>
       Detection
+    </button>
+    <button class="nav-item" data-view="risk-history">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/></svg>
+      Agents risk score
     </button>
     <button class="nav-item" data-view="incidents">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10.3 3.9L2.7 17a1.8 1.8 0 0 0 1.5 2.7h15.6a1.8 1.8 0 0 0 1.5-2.7L13.7 3.9a1.8 1.8 0 0 0-3.4 0z"/><path d="M12 9.5v4.2"/><circle cx="12" cy="16.6" r="0.9" fill="currentColor" stroke="none"/></svg>
@@ -434,6 +450,18 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       </div>
     </section>
 
+    <!-- AGENTS RISK SCORE -->
+    <section class="view" id="view-risk-history">
+      <div class="page-head">
+        <div><h1>Agents risk score</h1><p>How each agent's <span class="mono">risk_score</span> has evolved over time, from the statistical Detection Engine (§8) — every scored call, allowed or denied, adds a point.</p></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Risk score over time</h2><span class="meta" id="riskHistoryMeta"></span></div>
+        <div class="risk-chart-body" id="riskHistoryChartBody"></div>
+        <div class="risk-legend" id="riskHistoryLegend"></div>
+      </div>
+    </section>
+
     <!-- INCIDENTS -->
     <section class="view" id="view-incidents">
       <div class="page-head">
@@ -539,6 +567,40 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     },
     incidents:[
       {incident_id:"observable-c3d4e5f6-4", title:"Observable containment: agent c3d4e5f6... (suspend)", severity:"critical", status:"open", agent_id:"c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f", role:"sales-assistant", triggered_at:"2026-09-20T11:22:41+00:00", trigger_action:"containment:suspend", trigger_reason:"automated containment: risk_score=0.50 >= threshold=0.50; signals=['new_resource_burst(count=5 in 60s)']", recommended_actions:["Review the agent's recent audit trail for the specific actions that led to containment","Review the named signals against the agent's learned baseline to confirm this is not a false positive","Check the Inventory plane for this agent's SaaS-side footprint","Reinstate if cleared, or escalate to revoke_agent() if compromise is confirmed"], related_audit_seqs:[41], closed_at:null, closed_reason:null}
+    ],
+    // one (t, risk_score) series per scored agent, oldest first -- mirrors
+    // GET /detection/risk-history exactly, so this is the only place that
+    // needs updating if that endpoint's shape ever changes.
+    riskHistory:[
+      {agent_id:"6f1e2b3a-71c4-4a9e-9c2f-11a2b3c4d5e6", display_name:"sales-assistant-01", role:"sales-assistant", status:"active", points:[
+        {t:"2026-09-20T11:30:00+00:00", risk_score:0.20},
+        {t:"2026-09-20T11:32:30+00:00", risk_score:0.05},
+        {t:"2026-09-20T11:35:00+00:00", risk_score:0.04},
+        {t:"2026-09-20T11:37:30+00:00", risk_score:0.06},
+        {t:"2026-09-20T11:40:00+00:00", risk_score:0.05},
+        {t:"2026-09-20T11:42:30+00:00", risk_score:0.08},
+        {t:"2026-09-20T11:45:00+00:00", risk_score:0.05},
+        {t:"2026-09-20T11:47:30+00:00", risk_score:0.04},
+        {t:"2026-09-20T11:50:00+00:00", risk_score:0.06},
+        {t:"2026-09-20T11:55:00+00:00", risk_score:0.05},
+        {t:"2026-09-20T11:58:03+00:00", risk_score:0.07}
+      ]},
+      {agent_id:"a9b8c7d6-5e4f-4a3b-9c2d-1e2f3a4b5c6d", display_name:"triage-bot", role:"support-agent", status:"active", points:[
+        {t:"2026-09-20T11:10:00+00:00", risk_score:0.20},
+        {t:"2026-09-20T11:20:00+00:00", risk_score:0.15},
+        {t:"2026-09-20T11:28:00+00:00", risk_score:0.35},
+        {t:"2026-09-20T11:34:00+00:00", risk_score:0.18},
+        {t:"2026-09-20T11:40:12+00:00", risk_score:0.12}
+      ]},
+      {agent_id:"c3d4e5f6-1a2b-4c3d-8e9f-0a1b2c3d4e5f", display_name:"legacy-scraper", role:"sales-assistant", status:"suspended", points:[
+        {t:"2026-09-20T11:05:00+00:00", risk_score:0.20},
+        {t:"2026-09-20T11:10:00+00:00", risk_score:0.22},
+        {t:"2026-09-20T11:14:00+00:00", risk_score:0.28},
+        {t:"2026-09-20T11:17:00+00:00", risk_score:0.33},
+        {t:"2026-09-20T11:20:00+00:00", risk_score:0.41},
+        {t:"2026-09-20T11:21:30+00:00", risk_score:0.47},
+        {t:"2026-09-20T11:22:40+00:00", risk_score:0.50}
+      ]}
     ]
   };
 
@@ -559,7 +621,8 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     posture: [],
     detection: {},
     activity: {},
-    incidents: []
+    incidents: [],
+    riskHistory: []
   };
 
   // ---------------------------------------------------------------
@@ -591,6 +654,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     state.detection = EXAMPLE.detection;
     state.activity = EXAMPLE.activity;
     state.incidents = EXAMPLE.incidents;
+    state.riskHistory = EXAMPLE.riskHistory;
     render();
     setConn("demo", label || "Example data");
   }
@@ -602,7 +666,8 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       apiGet("/compliance/report"),
       apiGet("/inventory/shadow"),
       apiGet("/inventory/posture"),
-      apiGet("/export/soar/incidents")
+      apiGet("/export/soar/incidents"),
+      apiGet("/detection/risk-history")
     ]).then(function(results){
       state.live = true;
       state.agents = results[0];
@@ -610,6 +675,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       state.shadow = results[2];
       state.posture = results[3];
       state.incidents = results[4];
+      state.riskHistory = results[5].agents;
       // detection is per-agent; fetch baselines for every known agent
       return Promise.all(state.agents.map(function(a){
         return apiGet("/detection/" + encodeURIComponent(a.agent_id)).then(function(d){
@@ -659,6 +725,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
   function shortId(id){ return id ? id.slice(0,8) : "—"; }
   function fmtNum(n, digits){ return (n === null || n === undefined) ? "—" : Number(n).toFixed(digits === undefined ? 1 : digits); }
   function fmtDate(iso){ if(!iso) return "—"; var d = new Date(iso); return isNaN(d) ? iso : d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}); }
+  function fmtDateTime(iso){ if(!iso) return "—"; var d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}); }
   function pill(status){ return '<span class="pill ' + esc(status) + '">' + esc(status.replace(/_/g," ")) + '</span>'; }
 
   function render(){
@@ -669,6 +736,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     renderCompliance();
     renderInventory();
     renderDetectionPicker();
+    renderRiskHistory();
     renderIncidents();
     updateCounts();
   }
@@ -1022,6 +1090,71 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     document.getElementById("detDecisions").textContent = d && d.recent_decision_count != null ? (d.recent_decision_count + (d.recent_deny_count ? " (" + d.recent_deny_count + " denied)" : "")) : "—";
     var tags = (d && d.tools_seen) || [];
     document.getElementById("detTags").innerHTML = tags.length ? tags.map(function(t){ return '<span class="tag">' + esc(t) + '</span>'; }).join("") : '<span class="tag" style="opacity:.6">none yet</span>';
+  }
+
+  // Line identity only -- not the compliance/detection status colors
+  // (--ok/--warn/--critical/--na), which keep their own separate meaning.
+  var RISK_CHART_PALETTE = ["var(--chart-1)","var(--chart-2)","var(--chart-3)","var(--chart-4)","var(--chart-5)","var(--chart-6)","var(--chart-7)","var(--chart-8)"];
+
+  function riskLevel(score){ return score >= 0.6 ? "critical" : score >= 0.3 ? "warn" : "ok"; }
+
+  function renderRiskHistory(){
+    var body = document.getElementById("riskHistoryChartBody");
+    var legend = document.getElementById("riskHistoryLegend");
+    var meta = document.getElementById("riskHistoryMeta");
+    var series = (state.riskHistory || []).filter(function(a){ return a.points && a.points.length; });
+
+    if(!series.length){
+      body.innerHTML = '<div class="finding-row"><div class="txt"><div class="t1">No risk-score activity recorded yet.</div><div class="t2">Have an enrolled agent make a call, then refresh -- every scored call, allowed or denied, adds a point here.</div></div></div>';
+      legend.innerHTML = "";
+      meta.textContent = "";
+      return;
+    }
+
+    meta.textContent = series.length + " agent(s) scored";
+
+    var allTimes = [];
+    series.forEach(function(a){ a.points.forEach(function(p){ allTimes.push(new Date(p.t).getTime()); }); });
+    var minT = Math.min.apply(null, allTimes), maxT = Math.max.apply(null, allTimes);
+    if(!(maxT > minT)){ minT -= 60000; maxT += 60000; } // guard against a single shared timestamp
+
+    var width = 760, height = 280, padL = 38, padR = 16, padT = 14, padB = 26;
+    var plotW = width - padL - padR, plotH = height - padT - padB;
+    function xOf(t){ return padL + ((new Date(t).getTime() - minT) / (maxT - minT)) * plotW; }
+    function yOf(score){ return padT + (1 - Math.max(0, Math.min(1, score))) * plotH; }
+
+    var grid = [0, 0.25, 0.5, 0.75, 1].map(function(v){
+      var y = yOf(v);
+      return '<line x1="' + padL + '" y1="' + y.toFixed(2) + '" x2="' + (width - padR) + '" y2="' + y.toFixed(2) + '" stroke="var(--border)" stroke-width="1"/>' +
+        '<text x="' + (padL - 8) + '" y="' + (y + 3.5).toFixed(2) + '" text-anchor="end" font-size="10.5" fill="var(--text-faint)">' + v.toFixed(2) + "</text>";
+    }).join("");
+    var axisLabels =
+      '<text x="' + padL + '" y="' + (height - 6) + '" text-anchor="start" font-size="10.5" fill="var(--text-faint)">' + esc(fmtDateTime(new Date(minT).toISOString())) + "</text>" +
+      '<text x="' + (width - padR) + '" y="' + (height - 6) + '" text-anchor="end" font-size="10.5" fill="var(--text-faint)">' + esc(fmtDateTime(new Date(maxT).toISOString())) + "</text>";
+
+    var lines = series.map(function(a, idx){
+      var color = RISK_CHART_PALETTE[idx % RISK_CHART_PALETTE.length];
+      var pts = a.points.map(function(p){ return xOf(p.t).toFixed(2) + "," + yOf(p.risk_score).toFixed(2); }).join(" ");
+      var poly = a.points.length > 1
+        ? '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        : "";
+      var dots = a.points.map(function(p){
+        return '<circle cx="' + xOf(p.t).toFixed(2) + '" cy="' + yOf(p.risk_score).toFixed(2) + '" r="2.6" fill="' + color + '"><title>' +
+          esc(a.display_name) + ": " + fmtNum(p.risk_score, 2) + " at " + esc(fmtDateTime(p.t)) + "</title></circle>";
+      }).join("");
+      return poly + dots;
+    }).join("");
+
+    body.innerHTML =
+      '<svg viewBox="0 0 ' + width + " " + height + '" width="100%" height="' + height + '" style="display:block; min-width:480px">' +
+      grid + axisLabels + lines + "</svg>";
+
+    legend.innerHTML = series.map(function(a, idx){
+      var color = RISK_CHART_PALETTE[idx % RISK_CHART_PALETTE.length];
+      var latest = a.points[a.points.length - 1].risk_score;
+      return '<span><i class="dot-key" style="background:' + color + '"></i>' + esc(a.display_name) +
+        ' <span class="score" style="color:var(--' + riskLevel(latest) + ')">' + fmtNum(latest, 2) + "</span></span>";
+    }).join("");
   }
 
   function renderIncidents(){

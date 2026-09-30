@@ -738,6 +738,21 @@ register, adding and resolving an entry, the NIST report showing a real
 mix of pass/partial/fail, and the original `?framework=zta` report
 still working unchanged over the same instance.
 
+### NIST AI RMF cycle, on the Overview
+
+The read-only `/console` dashboard's Overview page renders Observable's
+four planes as the NIST AI RMF cycle itself, not just a control table:
+a donut split into three clickable sectors for MAP (Inventory &
+Posture, §7), MEASURE (Detection, §8), and MANAGE (Agent Guard, §1-6),
+around a center hub for GOVERN (Compliance & Export, §9) — matching
+the guide's own diagram, where GOVERN is cross-cutting rather than a
+fourth equal slice, not a plain 4-way pie. Each block shows a live KPI
+(open shadow-AI/posture findings, agents with an established baseline,
+open containment incidents, overall compliance status) pulled from data
+the console already loads, and is clickable straight through to that
+plane's existing tab — a navigation aid over data already on the page,
+not a new endpoint.
+
 ### What v1.5 does *not* do
 
 No feedback/appeal channel itself (MEASURE 3.3 names the gap; closing

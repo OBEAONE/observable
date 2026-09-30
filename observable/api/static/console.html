@@ -9,6 +9,7 @@
   --warn:#9A6400; --warn-soft:#FCF1DB;
   --critical:#C43132; --critical-soft:#FBE7E6;
   --na:#5B6576; --na-soft:#EAEDF2;
+  --plane-measure:#7C5CFC;
   --shadow: 0 1px 2px rgba(20,28,43,.05), 0 4px 16px rgba(20,28,43,.06);
 }
 @media (prefers-color-scheme: dark){
@@ -20,6 +21,7 @@
     --warn:#F0B429; --warn-soft:#332608;
     --critical:#FF6B6A; --critical-soft:#3A1717;
     --na:#8792A6; --na-soft:#1D2434;
+    --plane-measure:#A78BFA;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
   }
 }
@@ -31,6 +33,7 @@
   --warn:#F0B429; --warn-soft:#332608;
   --critical:#FF6B6A; --critical-soft:#3A1717;
   --na:#8792A6; --na-soft:#1D2434;
+  --plane-measure:#A78BFA;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
 }
 
@@ -163,6 +166,24 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
 .activity-legend span{display:inline-flex; align-items:center; gap:6px}
 .activity-legend .hint{margin-left:auto; color:var(--text-faint)}
 .dot-key{width:8px; height:8px; border-radius:50%; display:inline-block}
+
+/* ---------- NIST AI RMF cycle ring (Overview) ---------- */
+.nist-cycle-wrap{display:flex; flex-wrap:wrap; align-items:center; gap:24px; padding:20px 16px}
+.nist-cycle-svg{flex:0 0 auto}
+.nist-sector, .nist-hub{cursor:pointer; transition:opacity .12s ease, filter .12s ease}
+.nist-sector{opacity:.88}
+.nist-sector:hover{opacity:1; filter:brightness(1.06)}
+.nist-hub:hover{filter:brightness(1.06)}
+.nist-sector-label{font-family:"IBM Plex Sans",sans-serif; font-weight:600; fill:#fff; pointer-events:none}
+.nist-sector-sub{font-family:"IBM Plex Sans",sans-serif; fill:rgba(255,255,255,.85); pointer-events:none}
+.nist-sector-kpi{font-family:"IBM Plex Mono",monospace; font-weight:600; fill:#fff; pointer-events:none}
+.nist-hub-label{font-family:"IBM Plex Sans",sans-serif; font-weight:600; fill:#fff; pointer-events:none}
+.nist-hub-kpi{font-family:"IBM Plex Mono",monospace; font-weight:600; fill:#fff; pointer-events:none}
+.nist-legend{flex:1 1 260px; min-width:220px; font-size:13px; color:var(--text-muted)}
+.nist-legend-row{display:flex; align-items:flex-start; gap:8px; padding:6px 0}
+.nist-legend-row .sw{width:10px; height:10px; border-radius:3px; margin-top:4px; flex:0 0 10px}
+.nist-legend-row b{color:var(--text)}
+.nist-legend-note{margin-top:8px; font-size:12px; color:var(--text-faint)}
 .activity-node{transition:opacity .15s}
 .activity-node:hover{opacity:.75}
 .two-col{display:grid; grid-template-columns:1.3fr 1fr; gap:16px}
@@ -310,6 +331,11 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
       </div>
 
       <div class="kpi-row" id="kpiRow"></div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>NIST AI RMF alignment</h2><span class="meta">Observable's 4 planes, mapped to the 4-function cycle</span></div>
+        <div class="nist-cycle-wrap" id="nistCycleBody"></div>
+      </div>
 
       <div class="card" style="margin-bottom:16px">
         <div class="card-head"><h2>Agent activity map</h2><span class="meta" id="activityMapMeta"></span></div>
@@ -632,6 +658,7 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
 
   function render(){
     renderOverview();
+    renderNistCycle();
     renderActivityMap();
     renderAgents();
     renderCompliance();
@@ -677,6 +704,110 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
     document.getElementById("incidentsOverviewList").innerHTML = openInc.length ? openInc.map(function(i){
       return '<div class="finding-row">' + pill(i.severity) + '<div class="txt"><div class="t1">' + esc(i.title) + '</div><div class="t2 mono">' + esc(shortId(i.agent_id)) + ' · ' + esc(fmtDate(i.triggered_at)) + '</div></div></div>';
     }).join("") : '<div class="finding-row"><div class="txt"><div class="t1">No open incidents</div></div></div>';
+  }
+
+  // NIST AI RMF's own diagram treats GOVERN as cross-cutting -- wrapping
+  // MAP/MEASURE/MANAGE rather than sitting beside them as a fourth equal
+  // phase. This ring reflects that: GOVERN is the center hub (Compliance
+  // & Export, §9 -- it reads and reports on the other three), and the
+  // outer donut is the MAP -> MEASURE -> MANAGE cycle, one Observable
+  // plane per phase. Every block is clickable through to that plane's
+  // existing tab -- this is a navigation aid over data already loaded
+  // elsewhere on this page, not a new data source.
+  var NIST_PLANES = [
+    {
+      phase: "MAP", startDeg: 0, endDeg: 120, color: "var(--accent)",
+      plane: "Inventory & Posture (§7)", view: "inventory",
+      kpi: function(){ return (state.shadow.length + state.posture.length) + " findings"; },
+      sub: function(){ return state.shadow.filter(function(f){return f.severity==="high";}).length + " high-severity shadow AI"; }
+    },
+    {
+      phase: "MEASURE", startDeg: 120, endDeg: 240, color: "var(--plane-measure)",
+      plane: "Detection (§8)", view: "detection",
+      kpi: function(){
+        var known = Object.keys(state.detection).filter(function(id){ return state.detection[id] && state.detection[id].known; }).length;
+        return known + "/" + state.agents.length + " baseline";
+      },
+      sub: function(){ return state.agents.length + " agent(s) monitored"; }
+    },
+    {
+      phase: "MANAGE", startDeg: 240, endDeg: 360, color: "var(--warn)",
+      plane: "Agent Guard (§1-6)", view: "incidents",
+      kpi: function(){ return state.incidents.filter(function(i){return i.status==="open";}).length + " open"; },
+      sub: function(){ return state.incidents.length + " containment event(s) total"; }
+    }
+  ];
+
+  function polarPoint(cx, cy, r, deg){
+    var rad = deg * Math.PI / 180;
+    return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)];
+  }
+  function donutSectorPath(cx, cy, rOuter, rInner, startDeg, endDeg){
+    var p1 = polarPoint(cx, cy, rOuter, startDeg), p2 = polarPoint(cx, cy, rOuter, endDeg);
+    var p3 = polarPoint(cx, cy, rInner, endDeg), p4 = polarPoint(cx, cy, rInner, startDeg);
+    var largeArc = (endDeg - startDeg) > 180 ? 1 : 0;
+    return "M" + p1[0].toFixed(2) + "," + p1[1].toFixed(2) +
+      " A" + rOuter + "," + rOuter + " 0 " + largeArc + " 1 " + p2[0].toFixed(2) + "," + p2[1].toFixed(2) +
+      " L" + p3[0].toFixed(2) + "," + p3[1].toFixed(2) +
+      " A" + rInner + "," + rInner + " 0 " + largeArc + " 0 " + p4[0].toFixed(2) + "," + p4[1].toFixed(2) +
+      " Z";
+  }
+
+  function renderNistCycle(){
+    var body = document.getElementById("nistCycleBody");
+    var cx = 150, cy = 150, rOuter = 132, rInner = 68, hubR = 56;
+    var parts = [];
+
+    NIST_PLANES.forEach(function(p){
+      var midDeg = (p.startDeg + p.endDeg) / 2;
+      // Both lines anchor at the SAME point (mid-radius of the sector)
+      // and stack via tspan dy, not two separately-placed <text>
+      // elements at different radii -- that keeps each line's
+      // horizontal extent governed only by its own width, so it can't
+      // drift past the SVG viewport at wide angles (§ the MAP/MANAGE
+      // sectors, whose midpoints sit far from center horizontally).
+      var anchorPt = polarPoint(cx, cy, (rOuter + rInner) / 2, midDeg);
+      parts.push(
+        '<path class="nist-sector" data-view="' + p.view + '" fill="' + p.color + '" stroke="var(--surface)" stroke-width="2" ' +
+        'd="' + donutSectorPath(cx, cy, rOuter, rInner, p.startDeg, p.endDeg) + '"><title>' +
+        esc(p.phase + " — " + p.plane + ": " + p.kpi() + ", " + p.sub()) + "</title></path>"
+      );
+      parts.push(
+        '<text x="' + anchorPt[0].toFixed(1) + '" y="' + anchorPt[1].toFixed(1) + '" text-anchor="middle">' +
+        '<tspan class="nist-sector-label" font-size="12.5" x="' + anchorPt[0].toFixed(1) + '" dy="-4">' + esc(p.phase) + "</tspan>" +
+        '<tspan class="nist-sector-kpi" font-size="10.5" x="' + anchorPt[0].toFixed(1) + '" dy="15">' + esc(p.kpi()) + "</tspan>" +
+        "</text>"
+      );
+    });
+
+    // GOVERN hub -- the center, wrapping the cycle (§9 Compliance & Export)
+    var govStatus = state.compliance ? state.compliance.overall_status : null;
+    var govColor = !govStatus ? "var(--na)" : govStatus === "pass" ? "var(--ok)" : govStatus === "fail" ? "var(--critical)" : "var(--accent-2)";
+    var govKpi = govStatus ? govStatus.toUpperCase() : "—";
+    var govSub = state.compliance
+      ? (state.compliance.counts.pass + "✓ " + state.compliance.counts.fail + "✗ " + state.compliance.counts.partial + "~")
+      : "no data";
+    parts.push(
+      '<circle class="nist-hub" data-view="compliance" cx="' + cx + '" cy="' + cy + '" r="' + hubR + '" fill="' + govColor + '" stroke="var(--surface)" stroke-width="3">' +
+      "<title>" + esc("GOVERN — Compliance & Export (§9): " + govKpi + ", " + govSub) + "</title></circle>"
+    );
+    parts.push('<text class="nist-hub-label" x="' + cx + '" y="' + (cy - 10) + '" font-size="13" text-anchor="middle">GOVERN</text>');
+    parts.push('<text class="nist-hub-kpi" x="' + cx + '" y="' + (cy + 10) + '" font-size="13" text-anchor="middle">' + esc(govKpi) + "</text>");
+    parts.push('<text class="nist-sector-sub" x="' + cx + '" y="' + (cy + 26) + '" font-size="10" text-anchor="middle">' + esc(govSub) + "</text>");
+
+    body.innerHTML =
+      '<svg class="nist-cycle-svg" viewBox="0 0 300 300" width="260" height="260"><g>' + parts.join("") + "</g></svg>" +
+      '<div class="nist-legend">' +
+        '<div class="nist-legend-row"><span class="sw" style="background:var(--accent-2)"></span><div><b>GOVERN</b> — Compliance &amp; Export (§9). Cross-cutting: reads and reports on the other three, live. Click the center.</div></div>' +
+        '<div class="nist-legend-row"><span class="sw" style="background:var(--accent)"></span><div><b>MAP</b> — Inventory &amp; Posture (§7). Discovers what SaaS apps/agents exist and characterizes impact.</div></div>' +
+        '<div class="nist-legend-row"><span class="sw" style="background:var(--plane-measure)"></span><div><b>MEASURE</b> — Detection (§8). Behavioral baselining + intent-conformance quantify risk.</div></div>' +
+        '<div class="nist-legend-row"><span class="sw" style="background:var(--warn)"></span><div><b>MANAGE</b> — Agent Guard (§1-6). Policy decision, containment, revocation act on that risk.</div></div>' +
+        '<div class="nist-legend-note">Cycle runs MAP → MEASURE → MANAGE, back to MAP — click any block to open that plane’s tab.</div>' +
+      "</div>";
+
+    body.querySelectorAll("[data-view]").forEach(function(el){
+      el.addEventListener("click", function(){ switchView(el.getAttribute("data-view")); });
+    });
   }
 
   function renderActivityMap(){
@@ -902,13 +1033,18 @@ td.num, th.num{text-align:right; font-family:"IBM Plex Mono"; font-variant-numer
   // ---------------------------------------------------------------
   // nav + modal wiring
   // ---------------------------------------------------------------
-  document.querySelectorAll(".nav-item[data-view]").forEach(function(btn){
-    btn.addEventListener("click", function(){
-      document.querySelectorAll(".nav-item[data-view]").forEach(function(b){ b.classList.remove("active"); });
-      btn.classList.add("active");
-      document.querySelectorAll(".view").forEach(function(v){ v.classList.remove("active"); });
-      document.getElementById("view-" + btn.dataset.view).classList.add("active");
+  function switchView(name){
+    document.querySelectorAll(".nav-item[data-view]").forEach(function(b){
+      b.classList.toggle("active", b.dataset.view === name);
     });
+    document.querySelectorAll(".view").forEach(function(v){ v.classList.remove("active"); });
+    var target = document.getElementById("view-" + name);
+    if(target){ target.classList.add("active"); }
+    window.scrollTo(0, 0);
+  }
+
+  document.querySelectorAll(".nav-item[data-view]").forEach(function(btn){
+    btn.addEventListener("click", function(){ switchView(btn.dataset.view); });
   });
 
   document.getElementById("detectionAgentSelect").addEventListener("change", function(e){

@@ -18,17 +18,17 @@ from observable.tokens.service import (
 class AllowAllAuthorizer:
     """Test stub: grants every requested scope."""
 
-    def authorize_scopes(self, *, role, tier, requested):
+    def authorize_scopes(self, *, role, tier, requested, agent_id=None):
         return list(requested)
 
 
 class DenyAllAuthorizer:
-    def authorize_scopes(self, *, role, tier, requested):
+    def authorize_scopes(self, *, role, tier, requested, agent_id=None):
         return []
 
 
 class OnlyReadAuthorizer:
-    def authorize_scopes(self, *, role, tier, requested):
+    def authorize_scopes(self, *, role, tier, requested, agent_id=None):
         return [s for s in requested if s.tool == "crm.read"]
 
 

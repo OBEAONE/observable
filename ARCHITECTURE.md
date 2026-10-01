@@ -34,11 +34,13 @@ v1 builds the **Agent Guard core**:
    policy decision + input sanitization + tamper-evident audit log +
    automated containment (suspend/quarantine/revoke).
 
-Not in v1 (flagged for v2, see §7): SIEM streaming, sandboxed execution
-runtime, hardware attestation, full multi-agent tracing, output semantic
-analysis. (Behavioral baselining / anomaly detection was flagged here in
-the original scope note but was delivered in v1.2, §8 — this line is kept
-accurate rather than left to imply it's still missing.)
+Not in v1 (flagged for v2, see §7): SIEM streaming, hardware attestation,
+full multi-agent tracing, output semantic analysis. (Behavioral
+baselining / anomaly detection was flagged here in the original scope
+note but was delivered in v1.2, §8; tool execution sandboxing was also
+flagged here but a time/result-bounded — not OS-level — version was
+delivered in v1.10, §9.10. Both lines are kept accurate rather than left
+to imply they're still missing.)
 
 ---
 
@@ -144,7 +146,7 @@ Modeled on RFC 7523 (JWT bearer) + RFC 7800/8705 (PoP / mTLS-bound tokens).
   "iss": "observable-token-service",
   "sub": "agent:5b1e...c2",
   "cnf": { "x5t#S256": "<base64url SHA-256 of agent's leaf cert DER>" },
-  "scope": "tool:crm.read tool:email.send:rate=10/min",
+  "scope": "tool:crm.read:resource=A-1,A-2 tool:email.send:rate=10/min",
   "role": "sales-assistant",
   "tier": "enterprise",
   "aud": "observable-gateway",
@@ -167,6 +169,25 @@ Modeled on RFC 7523 (JWT bearer) + RFC 7800/8705 (PoP / mTLS-bound tokens).
   never a broad "admin" scope — this is Least Agency, not just least
   privilege: it says which tool, and the constraint narrows verb/rate/
   resource.
+- **The `resource=` constraint clause is enforced, not just carried.**
+  `tool:crm.read:resource=A-1,A-2` authorizes `crm.read` only against
+  those two resource_ids — a call for any other resource_id is denied by
+  the Policy Engine (`observable/policy/engine.py`,
+  `Scope.resource_allowlist()` in `observable/tokens/scope.py`), even
+  though the token itself is validly signed and unexpired. A grant with
+  no `resource=` clause at all keeps the original, unrestricted,
+  tool-only granularity — resource scoping is opt-in per grant, not a
+  new requirement on every scope. A token can carry more than one grant
+  for the same tool (e.g. two separate resource-scoped approvals); Agent
+  Guard tries every one of them against the live call and allows it if
+  any matches (§6 step 5), rather than only ever checking the first.
+  A malformed constraint (`resource=` with nothing after it, a duplicate
+  clause) is rejected at grant time by `authorize_scopes` — it's never
+  minted into a token — and, belt-and-braces, `authorize_action` fails
+  closed on it too if a malformed `Scope` ever reaches it some other way.
+  The `rate=` clause in the example above still only parses — nothing
+  enforces a call-rate ceiling yet; that remains open (§5's "not built"
+  list).
 
 ---
 
@@ -181,6 +202,9 @@ Modeled on RFC 7523 (JWT bearer) + RFC 7800/8705 (PoP / mTLS-bound tokens).
 | mTLS with certificate pinning | Enterprise | Gateway terminates mTLS, pins `cnf` to leaf cert per request |
 | RBAC, deny-by-default | Foundation | Policy Engine: no match ⇒ deny; default policy set is empty |
 | ABAC with context (time, risk score) | Enterprise | Policy Engine evaluates `req_ctx` (time window, risk score, resource sensitivity) alongside role |
+| Privilege scoping — resource-level granularity | Enterprise (v1.7) | A scope's `resource=` constraint is enforced, not just carried: `authorize_action` denies a call whose `resource_id` isn't in the grant's set (§4.2) |
+| Privilege scoping — dynamic/JIT elevation | Enterprise/Advanced (v1.8) | `ElevationStore` (§9.8): time-boxed, per-agent grant of one tool a role doesn't statically carry; authorizes new mints and live calls immediately, automatically stops authorizing anything the instant it expires or is revoked — no separate cleanup step. Still missing: there is no automated "task completion" trigger — only a wall-clock TTL or an explicit early revoke |
+| Privilege scoping — call-rate ceiling ("how often") | Enterprise (v1.9) | `RateLimiter` (§9.9): a scope's `rate=10/min`-style constraint is enforced, not just carried — `authorize_action` denies once an agent has made `limit` calls to that tool within the trailing window, checked last so a call denied for any other reason never consumes budget |
 | Continuous authorization, real-time revocation | Advanced | Every Guard request re-checks policy + revocation, not just at token mint; a policy or revocation change is live within one token TTL (≤5 min) |
 | Identity-based isolation | Foundation | Every internal service call also goes through Guard/PoP; no service trusts a caller by network origin |
 | Comprehensive action logs | Foundation | Guard logs every tool invocation, actor, decision, timestamp |
@@ -190,13 +214,16 @@ Modeled on RFC 7523 (JWT bearer) + RFC 7800/8705 (PoP / mTLS-bound tokens).
 | Automated containment | Enterprise | Guard can auto-suspend an agent's certificate and revoke all outstanding tokens (`respond.contain_agent()`) on a policy-defined trigger; decision to escalate stays human, per the guide's "automate the bookkeeping, not the decisions" rule |
 | Behavioral analysis with contextual awareness | Advanced (partial, v1.4) | Optional `intent_mismatch` signal (§8.5): a self-hosted CLM model judges whether each tool call fits the agent's declared purpose; capped, fail-open, off by default |
 | Version-controlled / signed policy | Enterprise | Policy bundles are JSON, hash-referenced, and (optionally) signed by an authorized policy-admin cert before the engine will load them |
+| Sandboxed tool execution | Foundation (v1.10) | `observable.guard.sandbox` (§9.10): every tool invocation runs under a wall-clock deadline and a result-size cap, so a slow, hung, or runaway tool can't block Guard or exhaust the response path; per-tool overrides via `ToolDefinition`. Not OS-level process/container isolation — see §9.10's caveats |
 
-Rows intentionally left for v2 (not built here): sandboxed execution,
-confidential computing, OpenTelemetry distributed tracing,
-spotlighting/constitutional-classifier input validation. Statistical
-anomaly detection is delivered in §8 (v1.2) and SIEM/SOAR export in §9
-(v1.3). One model-derived signal, intent conformance, is delivered in
-§8.5 (v1.4); full ML behavioral models remain deferred (§8.6).
+Rows intentionally left for v2 (not built here): confidential computing,
+OpenTelemetry distributed tracing, spotlighting/constitutional-classifier
+input validation, and OS-level (process/container) isolation of tool
+execution — v1.10 bounds a tool's *time and output*, not a full
+untrusted-code sandbox (§9.10). Statistical anomaly detection is
+delivered in §8 (v1.2) and SIEM/SOAR export in §9 (v1.3). One
+model-derived signal, intent conformance, is delivered in §8.5 (v1.4);
+full ML behavioral models remain deferred (§8.6).
 
 ---
 
@@ -867,6 +894,318 @@ live). No historical backfill from the Audit Chain on restart — unlike
 process starts every agent's risk history empty, since no `risk_score`
 field exists on `AuditEntry` to replay from (and adding one was
 deliberately ruled out above, to keep the audit schema unchanged).
+
+## 9.7 Resource-scoped grants (v1.7)
+
+§4.2 always *described* a `resource=` constraint clause on a scope
+(`tool:crm.read:resource=A-1`) as part of what makes this Least Agency
+rather than plain least privilege — but until now nothing actually read
+it. A grant only ever narrowed *which tool*, never *which record*. This
+closes that gap, purely within the existing scope/token/policy model —
+no new token fields, no schema change.
+
+**Grammar.** A scope's `constraint` string is `;`-separated `key=value`
+clauses (`observable/tokens/scope.py`, `parse_constraint()`); a value
+may itself be a comma-separated list. `Scope.resource_allowlist()`
+reads the `resource` clause specifically and returns the set of allowed
+`resource_id`s, or `None` if the scope carries no such clause at all
+(the original, unrestricted, tool-only grant — resource scoping is
+opt-in per grant, existing scopes and tests are unaffected). A
+malformed clause (`resource=` with nothing after it, a duplicate key)
+raises rather than being silently read as "unrestricted."
+
+**Enforcement, fail-closed at two points:**
+- `PolicyEngine.authorize_scopes()` (mint time) drops a requested scope
+  whose constraint doesn't parse — the same way it already drops a
+  scope for an unregistered tool. A malformed grant is never minted
+  into a token in the first place.
+- `PolicyEngine.authorize_action()` (every request, §6 step 5) denies
+  the call if the scope carries a `resource=` allowlist and either no
+  `resource_id` was given (can't confirm it's in-bounds) or the given
+  `resource_id` isn't in that set. A scope that somehow reaches this
+  check still malformed (not possible via `authorize_scopes`, but
+  defense in depth for a directly-constructed `Scope`) denies too,
+  rather than being treated as unrestricted.
+
+**Multiple grants per tool.** A token can carry more than one scope
+entry for the same tool — e.g. two separate resource-scoped approvals
+made at different times (`tool:crm.read:resource=A-1` and
+`tool:crm.read:resource=B-1`). `AgentGuard.invoke()` (§6 step 5) tries
+every scope matching the requested tool name and allows the call if
+*any* of them authorizes it against the live context, rather than only
+ever evaluating the first match — a change from before this feature,
+when only one scope per tool was ever meaningfully possible.
+
+### What v1.7 does *not* do
+
+No dynamic/JIT privilege elevation — a resource-scoped grant is exactly
+as static as an unrestricted one; it's requested once at mint time and
+lasts the token's TTL, not "elevated for this one task, then reverted."
+No enforcement of the `rate=` clause at the time this section was
+written — since closed in §9.9. No resource *hierarchies* or
+wildcards (`resource=account/*`) — the allowlist is an exact-match set
+of literal IDs. No UI surface for granting or reviewing resource-scoped
+grants — they're requested the same way any scope is, via
+`requested_scopes` on `POST /token`.
+
+## 9.8 Just-in-time privilege elevation (v1.8)
+
+§9.7 closed "which resource"; this closes the other half of Privilege
+Scoping the guide calls out: "when" and "for how long." Before this, a
+role's grants were exactly as static as the bundle that defined them —
+the only way to give an agent a capability its role lacks was to change
+the bundle itself (affecting every agent with that role, forever, until
+someone remembers to change it back). `ElevationStore`
+(`observable/policy/elevation.py`) grants one specific agent one
+specific tool — optionally narrowed to specific `resource_id`s, exactly
+like §9.7's constraint — for a bounded time, and it stops authorizing
+anything the instant that time elapses or an operator revokes it early.
+No background job, timer, or cleanup step exists or is needed: every
+check (`ElevationGrant.is_active(now)`) is evaluated fresh against
+whatever `now` the caller passes, the same way token TTL and CRL expiry
+already work in this codebase — "automatic expiration" means the check
+that used to say yes simply starts saying no.
+
+**Two integration points, matching the guide's own RBAC/ABAC split
+(§4.2, §6):**
+- **At mint** (`PolicyEngine.authorize_scopes`, now also taking
+  `agent_id`): if the static bundle doesn't grant a requested tool to
+  this role, an active elevation grant for this specific agent+tool is
+  checked as a fallback. If one exists, the *grant's own* scope is
+  minted — never the raw request — so an elevation can only ever narrow
+  what ends up in the token, never be used to ask for more than what
+  was actually approved (a request for unrestricted `crm.delete` when
+  the only active grant is `resource=A-1` mints `resource=A-1`, not
+  unrestricted access).
+- **At every action** (`PolicyEngine.authorize_action`, `ActionContext`
+  now also carrying `agent_id`): the same static-grant-missing branch
+  re-checks for a still-active elevation, every single call — not just
+  at mint. This is what makes expiry and early revocation take effect
+  immediately, mid-token-life, without needing to separately invalidate
+  the JWT: the token still parses and still hasn't hit its own TTL, but
+  the very next `invoke()` is denied the moment the elevation itself
+  is gone. The per-call resource check that follows is the same one
+  §9.7 already added — it re-validates against whatever the *scope*
+  carries (which, for an elevated grant, is exactly what was minted
+  above), not against the elevation store a second time.
+- **Tier is not elevatable.** A tool's `min_tier` requirement (§4.2) is
+  checked identically regardless of whether access comes from a static
+  role grant or an elevation — elevation raises "what a role can reach,"
+  it does not lower the identity-assurance bar a tier represents.
+
+**Multiple grants, and which one wins.** An agent can hold more than one
+active elevation for the same tool (e.g. two separate, narrower
+approvals granted at different times); `ElevationStore.active_grant_for`
+breaks ties by most-recently-granted, so a newer correction takes
+precedence without the older grant needing to be explicitly revoked
+first. Separately, `AgentGuard.invoke()` (§6 step 5) already tries every
+scope a token carries for the requested tool name (added in §9.7 for
+multiple resource-scoped RBAC grants) — the same loop covers a token
+that carries more than one elevation-derived scope, with no extra code.
+
+**Auditability.** `AgentGuard.grant_elevation()`/`revoke_elevation()`
+are the only way to create or end a grant, and both write a hash-chained
+audit entry (`elevation:grant` / `elevation:revoke`, alongside the
+existing `containment:*` actions) — "log all privilege changes" from
+the guide's Enterprise row, satisfied the same way containment already
+satisfies "automate the bookkeeping, not the decisions": the decision to
+elevate is the caller's (an operator, or an upstream approval workflow),
+Guard only enforces and records it.
+
+**API.** `POST /admin/elevation/grant`, `POST /admin/elevation/{id}/revoke`,
+`GET /admin/elevation` (optionally filtered by `agent_id`) — mirroring
+the existing `/admin/contain`/`/admin/reinstate` pair.
+
+### What v1.8 does *not* do
+
+No automated "task completion" trigger — a grant ends on its wall-clock
+TTL or an explicit early revoke, never on Observable inferring that the
+task it was granted for is actually done. No approval workflow of its
+own (who may call `grant_elevation`, or a request/approve handshake) —
+this module enforces and audits whatever a caller decides; deciding
+who's allowed to decide is deployment-specific, out of scope here, same
+caveat as automated containment's "the decision stays human." No
+enforcement of the `rate=` constraint clause at the time this section
+was written — since closed in §9.9. No console UI for granting,
+reviewing, or revoking elevations — API-only for now, same as §9.7's
+resource scoping.
+
+## 9.9 Call-rate enforcement (v1.9)
+
+§9.7 closed "which resource," §9.8 closed "when/for how long." This
+closes the last piece of the scope grammar that §4.2's example JWT
+always showed but nothing ever read: `tool:email.send:rate=10/min` —
+Least Agency's "how often," not just "which tool." Before this, a
+`rate=` clause parsed cleanly and then did nothing; any grant, static or
+elevated, resource-scoped or not, authorized unlimited calls for its
+entire lifetime.
+
+**A sliding-window counter, per `(agent_id, tool)`.** `RateLimiter`
+(`observable/policy/ratelimit.py`) keys its counters by agent and tool —
+deliberately *not* by scope string or by grant — because what a rate
+clause actually limits is "how many times has this agent invoked this
+tool recently," regardless of which grant (a static role, a
+resource-scoped one, or a JIT elevation) happened to authorize any
+individual call. Two different grants for the same tool share one
+ceiling rather than each getting its own budget. `check_and_record()` is
+an atomic check-and-increment: a denied attempt records nothing, so
+retrying right after a legitimate denial isn't doubly penalized and an
+agent can't be locked out indefinitely by its own denied attempts.
+`count_in_window()` is a separate, read-only introspection method that
+never mutates state.
+
+**Grammar.** `Scope.rate_limit()` (`observable/tokens/scope.py`) reads
+the constraint's `rate` clause (`<count>/<unit>`, unit one of
+`s`/`sec`/`second(s)`, `m`/`min`/`minute(s)`, `h`/`hr`/`hour(s)`,
+`d`/`day(s)`) and returns `(max_calls, window)`, or `None` if the scope
+carries no `rate=` clause at all — the original, unlimited grant,
+unaffected, exactly as `resource_allowlist()` already does for the
+`resource` clause. A zero/negative count or unrecognized unit raises,
+the same fail-closed behavior as every other malformed constraint in
+this grammar.
+
+**Enforcement, the same two-point pattern as §9.7 and §9.8:**
+- `PolicyEngine.authorize_scopes()` (mint time) also validates
+  `scope.rate_limit()` parses, alongside the existing
+  `resource_allowlist()` check, dropping the scope if not — a malformed
+  rate clause is never minted into a token.
+- `PolicyEngine.authorize_action()` (every request) checks the rate
+  limit *last*, after tier, business-hours, risk-score, and resource
+  checks have all already passed — so a call that would be denied
+  anyway for an unrelated reason never consumes rate budget. If the
+  agent is at or over `limit` calls to that tool within the trailing
+  `window`, the call is denied with a reason naming the current count,
+  the limit, and `retry_after`; otherwise the call is recorded and
+  allowed. This is also the one check in `authorize_action` that
+  mutates state — deliberately the last thing evaluated, so only calls
+  that are actually going to be admitted are ever counted.
+- Needs `context.agent_id` (added in §9.8) to key the counter; a
+  rate-limited scope presented with no `agent_id` is denied rather than
+  silently treated as unlimited.
+
+**Automatic reset, same idiom as everything else in this codebase.**
+Nothing expires or gets cleaned up on a timer — the sliding window is
+just "calls within `window` of `now`," re-evaluated fresh on every
+check, so a ceiling that was hit simply starts admitting calls again
+the instant the oldest call ages out, with no separate reset step, the
+same way token TTL, CRL revocation, and elevation expiry already work.
+
+**API.** No dedicated admin endpoint — like §9.7's resource scoping,
+rate limiting is purely a property of whatever scope was requested at
+`POST /token` (`tool:email.send:rate=10/min`), enforced transparently
+wherever that clause appears, not a separately granted or revoked
+capability.
+
+### What v1.9 does *not* do
+
+No distributed rate limiting — `RateLimiter` is in-memory and
+per-process, same durability model (and the same "resets to empty on
+restart is the safe failure direction") as the Identity Registry, Audit
+Chain, Detection Engine baselines, and Elevation Store; a multi-process
+or multi-region deployment would need a shared store (Redis, etc.) for
+one ceiling to hold across all of them. No token-bucket/burst
+allowance — a plain sliding window, so a ceiling of `10/min` is exactly
+"no more than 10 calls in any trailing 60 seconds," never a burst
+credit that can spike briefly. No per-resource rate ceilings (`rate=`
+combined with `resource=` limits the *tool* overall, not each resource
+separately) and no admin API for granting, adjusting, or inspecting
+limits — same gap as §9.7's resource scoping, requested the same way
+any other scope constraint is.
+
+## 9.10 Tool execution sandboxing (v1.10)
+
+The last row §5 carried as "intentionally left for v2": sandboxed
+execution. §9.7–§9.9 each bound *whether* a call is authorized
+(which resource, for how long a grant lasts, how often). This bounds
+something different — once a call *is* authorized, what the tool
+invoker itself is allowed to do to the Gateway process while it runs,
+independent of authorization entirely. Before this, step 6 of
+`AgentGuard.invoke()` called a registered tool invoker directly and
+simply waited for it to return (or raise); a tool that hung forever
+blocked that call forever, and a tool returning an arbitrarily large
+result had nothing stopping it from doing so.
+
+**Scoped honestly to what this codebase's tools actually are.**
+Observable's tools are first-party Python callables a deployer
+registers in-process (`AgentGuard.register_tool`) — often closures over
+shared in-memory demo state, as `observable/api/state.py`'s own
+`crm_read`/`email_send`/etc. are — not arbitrary untrusted code a tenant
+uploads. So the threat this closes is "a slow, buggy, or hung tool
+degrades the service for other agents," not "a malicious tool escapes
+to the host." That second, harder threat model — a real untrusted-code
+sandbox — needs OS-level isolation (a separate process or container, a
+seccomp/gVisor boundary, a network-egress policy) and tools invoked
+across a process boundary rather than as in-process closures; both are
+a rearchitecture out of scope here (see "What v1.10 does *not* do").
+
+**Two bounds, enforced by `observable/guard/sandbox.py`'s
+`run_sandboxed()`, wrapped around step 6 of `invoke()`:**
+- **A wall-clock execution deadline.** The invoker runs on its own
+  `threading.Thread(daemon=True)`; `run_sandboxed()` waits up to
+  `timeout_seconds` for it to finish. If it doesn't, a `ToolTimeoutError`
+  is raised and `invoke()` returns control to its caller immediately —
+  what the deadline actually buys is bounding how long *the request*
+  (and whatever's waiting on it — an HTTP worker) stays blocked on one
+  tool, not reclaiming the CPU time already spent. Python has no safe,
+  portable way to forcibly kill a running thread, so the invoker's own
+  thread is abandoned, not terminated; it keeps running in the
+  background until it finishes on its own or the process exits. The
+  thread is daemonized specifically so a tool that never returns can't
+  also wedge a graceful shutdown.
+- **A result-size cap.** Once the invoker returns, its result is
+  JSON-encoded and measured; a result over `max_result_bytes` raises a
+  `ResultTooLargeError` instead of being handed to output filtering and
+  the response path. A result that isn't JSON-serializable at all is
+  deliberately let through unchanged — diagnosing *that* failure belongs
+  to Gateway's existing output-encoding path, in its own terms, not to
+  this boundary.
+
+**Fail path, same shape as the existing `ToolExecutionError`.** Both
+violations are raised as `SandboxViolation` (a `ToolTimeoutError` or
+`ResultTooLargeError`), which `invoke()` catches and re-raises as a
+`ToolExecutionError` — the same exception type, and the same `502`
+mapping at the API layer (§6 `app.py`), a tool invoker's own exception
+already produced. The audit entry's reason is prefixed
+`"sandbox violation: ..."` so it reads distinctly from
+`"tool invocation raised: ..."` in the audit trail, even though both
+share the `error` decision and the same exception class at the Python
+level.
+
+**Defaults, with a per-tool override.** `AgentGuard` takes
+`sandbox_timeout_seconds` (default 10s) and `sandbox_max_result_bytes`
+(default 1 MB) at construction, applied to every tool. `ToolDefinition`
+gained two matching optional fields,
+`max_execution_seconds`/`max_result_bytes` (`None` means "use the
+Guard's default," the same convention `min_tier=None` already uses) —
+so one unusually slow or chatty tool (a `reporting.export` that
+legitimately takes longer, say) can be given its own bound via the
+policy bundle without loosening the default for every other tool.
+`PolicyEngine.tool_sandbox_limits(tool_name)` is the read accessor
+Guard calls before each invocation, alongside the existing
+`tool_sensitivity`/`tool_description` accessors.
+
+### What v1.10 does *not* do
+
+No OS-level isolation — no separate process, container, or
+seccomp/gVisor boundary; a tool still runs with the same memory space,
+filesystem access, and network reachability as the rest of the
+Gateway process. No hard CPU or memory ceiling — `RLIMIT_CPU`/`RLIMIT_AS`
+are process-wide on POSIX, not something a single thread inside a
+shared interpreter can be bound by individually, so a CPU-bound runaway
+tool is time-boxed (the *caller* is released) but is not prevented from
+continuing to spend CPU in the background until it finishes. No network
+egress control for what a tool calls out to. No forced termination of a
+timed-out invoker — Python provides no safe way to kill a running
+thread, so a timed-out tool's thread is abandoned, not stopped; under
+sustained, repeated timeouts this means unboundedly many abandoned
+threads can accumulate for the life of the process. No distributed or
+shared sandbox state — bounds are purely per-process, same durability
+model as every other piece of live state in this reference deployment
+(Identity Registry, Audit Chain, Elevation Store, Rate Limiter). No
+admin API for inspecting or adjusting sandbox limits at runtime — they
+are set at `AgentGuard` construction and per-tool in the policy bundle,
+not changeable through `POST`/`GET` endpoints the way containment and
+elevation are.
 
 ---
 

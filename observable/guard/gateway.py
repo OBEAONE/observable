@@ -3,10 +3,13 @@ Block 5 — Agent Guard gateway.
 
 This is the single door every agent action goes through
 (ARCHITECTURE.md §6): PoP verification -> scope check -> input
-sanitization -> ABAC re-authorization -> tool invocation -> output
-filtering -> audit. Every one of those steps writes to the audit chain,
-allow or deny, so "what did this agent try to do" is always answerable
-even for denied attempts.
+sanitization -> ABAC re-authorization -> sandboxed tool invocation ->
+output filtering -> audit. Every one of those steps writes to the audit
+chain, allow or deny, so "what did this agent try to do" is always
+answerable even for denied attempts. Tool invocation itself runs inside
+``observable.guard.sandbox`` (§9.10): a wall-clock deadline and a result
+size cap, independent of whether the call was authorized -- bounding
+what an authorized-but-slow-or-broken tool can still do to the Gateway.
 
 Automated containment (suspend an agent, killing every outstanding
 token within one verify() call) is exposed here two ways: an explicit
@@ -30,12 +33,19 @@ from typing import Callable, Optional
 from observable.detection.engine import DetectionEngine
 from observable.detection.scorer import RiskAssessment
 from observable.guard.audit import AuditChain, AuditEntry
+from observable.guard.sandbox import (
+    DEFAULT_MAX_RESULT_BYTES,
+    DEFAULT_TIMEOUT_SECONDS,
+    SandboxViolation,
+    run_sandboxed,
+)
 from observable.guard.sanitize import filter_output, sanitize_input
 from observable.identity.registry import AgentRecord, IdentityRegistry
 from observable.pki.interface import RevocationReason
 from observable.pki.validate import CertificateValidationError, leaf_thumbprint
-from observable.policy.engine import ActionContext, PolicyEngine
-from observable.tokens.scope import Scope
+from observable.policy.elevation import ElevationGrant
+from observable.policy.engine import ActionContext, Decision, PolicyEngine
+from observable.tokens.scope import InvalidScopeError, Scope
 from observable.tokens.service import TokenError, TokenService
 
 # A tool invoker takes the sanitized payload and an optional resource id
@@ -92,6 +102,8 @@ class AgentGuard:
         audit: Optional[AuditChain] = None,
         detection: Optional[DetectionEngine] = None,
         auto_contain_threshold: Optional[float] = None,
+        sandbox_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        sandbox_max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES,
     ) -> None:
         self._registry = registry
         self._token_service = token_service
@@ -102,6 +114,12 @@ class AgentGuard:
         self._auto_contain_threshold = auto_contain_threshold
         if auto_contain_threshold is not None and detection is None:
             raise ValueError("auto_contain_threshold requires a detection engine")
+        # Execution sandbox defaults (§9.10) — a per-tool
+        # ToolDefinition.max_execution_seconds/max_result_bytes
+        # overrides these for one specific tool; these are what every
+        # other tool falls back to.
+        self._sandbox_timeout_seconds = sandbox_timeout_seconds
+        self._sandbox_max_result_bytes = sandbox_max_result_bytes
 
     def register_tool(self, tool_name: str, invoker: ToolInvoker) -> None:
         self._tools[tool_name] = invoker
@@ -123,6 +141,18 @@ class AgentGuard:
         if threshold is not None and self._detection is None:
             raise ValueError("auto_contain_threshold requires a detection engine")
         self._auto_contain_threshold = threshold
+
+    @property
+    def sandbox_timeout_seconds(self) -> float:
+        """Default wall-clock execution deadline (§9.10) applied to any
+        tool whose registered ``ToolDefinition`` doesn't override it."""
+        return self._sandbox_timeout_seconds
+
+    @property
+    def sandbox_max_result_bytes(self) -> int:
+        """Default result-size cap (§9.10) applied to any tool whose
+        registered ``ToolDefinition`` doesn't override it."""
+        return self._sandbox_max_result_bytes
 
     # ------------------------------------------------------------------
     def invoke(
@@ -225,8 +255,13 @@ class AgentGuard:
             raise GuardDeniedError(deny_reason, audit_seq=entry.seq)
 
         # 3. The token must actually carry a scope for this exact tool.
-        matched_scope = next((s for s in claims.scopes if s.tool == tool_name), None)
-        if matched_scope is None:
+        # A token can hold more than one grant for the same tool (e.g.
+        # two separate resource-scoped grants -- "resource=A-1" and
+        # "resource=A-2") so every candidate is kept here; which one (if
+        # any) actually authorizes *this* call is decided at step 5,
+        # against the live context, not by picking just the first match.
+        candidate_scopes = [s for s in claims.scopes if s.tool == tool_name]
+        if not candidate_scopes:
             reason = f"token does not carry a scope for tool {tool_name!r}"
             entry = self._log(
                 agent_id=claims.agent_id,
@@ -261,10 +296,25 @@ class AgentGuard:
         live_risk_score = max(
             claims.risk_score_at_mint, extra_risk_score, assessment.risk_score if assessment else 0.0
         )
-        context = ActionContext(timestamp=now, risk_score=live_risk_score, resource_id=resource_id)
-        decision = self._policy_engine.authorize_action(
-            role=claims.role, tier=claims.tier, scope=matched_scope, context=context
+        context = ActionContext(
+            timestamp=now, risk_score=live_risk_score, resource_id=resource_id, agent_id=claims.agent_id
         )
+        decision: Optional[Decision] = None
+        deny_reasons: list[str] = []
+        for candidate in candidate_scopes:
+            candidate_decision = self._policy_engine.authorize_action(
+                role=claims.role, tier=claims.tier, scope=candidate, context=context
+            )
+            if candidate_decision.allowed:
+                decision = candidate_decision
+                break
+            deny_reasons.append(candidate_decision.reason)
+        if decision is None:
+            # every candidate grant denied this specific call -- report all
+            # distinct reasons (usually just one; more than one only when
+            # the token holds several grants for this tool, e.g. two
+            # different resource-scoped grants, neither covering this call).
+            decision = Decision(allowed=False, reason="; ".join(dict.fromkeys(deny_reasons)))
         if not decision.allowed:
             deny_reason = decision.reason
             if assessment and assessment.signals:
@@ -297,8 +347,34 @@ class AgentGuard:
             )
             raise GuardDeniedError(reason, audit_seq=entry.seq)
 
+        # Sandbox bounds (§9.10): a per-tool override from the registered
+        # ToolDefinition, falling back to this Guard's own configured
+        # defaults when the tool carries none.
+        tool_timeout, tool_max_bytes = self._policy_engine.tool_sandbox_limits(tool_name)
+        timeout_seconds = tool_timeout if tool_timeout is not None else self._sandbox_timeout_seconds
+        max_result_bytes = (
+            tool_max_bytes if tool_max_bytes is not None else self._sandbox_max_result_bytes
+        )
+
         try:
-            raw_result = invoker(payload, resource_id)
+            raw_result = run_sandboxed(
+                invoker,
+                payload,
+                resource_id,
+                timeout_seconds=timeout_seconds,
+                max_result_bytes=max_result_bytes,
+            )
+        except SandboxViolation as exc:
+            entry = self._log(
+                agent_id=claims.agent_id,
+                role=claims.role,
+                action=f"tool:{tool_name}",
+                decision="error",
+                reason=f"sandbox violation: {exc}",
+                resource_id=resource_id,
+                request_jti=claims.jti,
+            )
+            raise ToolExecutionError(str(exc), audit_seq=entry.seq) from exc
         except Exception as exc:  # noqa: BLE001 - deliberately broad, tool code is untrusted
             entry = self._log(
                 agent_id=claims.agent_id,
@@ -392,6 +468,88 @@ class AgentGuard:
             request_jti=None,
         )
         return record
+
+    # ------------------------------------------------------------------
+    # Just-in-time privilege elevation (§4b) -- the decision to elevate
+    # stays with the caller (an operator, or an upstream approval
+    # workflow); Guard only enforces whatever is granted and lets it
+    # lapse on its own, the same "automate the bookkeeping, not the
+    # decisions" rule containment already follows above.
+    # ------------------------------------------------------------------
+    @property
+    def elevation(self):
+        """Read-only access to the underlying elevation store (listing
+        grants for an agent, or every grant, for an admin/audit view) —
+        the same store ``authorize_scopes``/``authorize_action`` already
+        consult through the Policy Engine, so a grant made here is
+        visible to policy immediately."""
+        return self._policy_engine.elevation
+
+    @property
+    def rate_limiter(self):
+        """Read-only access to the call-rate counter (§9.9) — for an
+        admin/API view of how close an agent is to a tool's `rate=`
+        ceiling. There is no ``grant``-style write method here: a rate
+        limit isn't granted, it's simply part of whatever scope a call
+        is already using, static or elevated."""
+        return self._policy_engine.rate_limiter
+
+    def grant_elevation(
+        self,
+        *,
+        agent_id: str,
+        tool: str,
+        resource_ids: Optional[list[str]] = None,
+        reason: str,
+        granted_by: str,
+        ttl: dt.timedelta,
+    ) -> ElevationGrant:
+        """Grant a time-boxed permission for one tool (optionally
+        narrowed to specific resource_ids) that this agent's static role
+        does not otherwise carry. It authorizes new token mints and live
+        calls the moment it's granted, and stops doing either the
+        instant ``ttl`` elapses or ``revoke_elevation`` is called early —
+        no separate cleanup step, since every check re-evaluates against
+        the current wall clock (§4b)."""
+        record = self._registry.get(agent_id)  # raises if agent_id is unknown -- fail fast, not silently
+        constraint = f"resource={','.join(resource_ids)}" if resource_ids else None
+        scope = Scope(tool=tool, constraint=constraint)
+        try:
+            scope.resource_allowlist()  # validate before it's ever stored
+        except InvalidScopeError as exc:
+            raise ValueError(f"invalid resource_ids for elevation: {exc}") from exc
+        grant = self._policy_engine.elevation.grant(
+            agent_id=agent_id, scope=scope, reason=reason, granted_by=granted_by, ttl=ttl
+        )
+        self._log(
+            agent_id=agent_id,
+            role=record.role,
+            action="elevation:grant",
+            decision="action",
+            reason=(
+                f"{reason} (tool={tool!r}, resource_ids={resource_ids}, "
+                f"expires_at={grant.expires_at.isoformat()}, granted_by={granted_by!r})"
+            ),
+            resource_id=None,
+            request_jti=None,
+        )
+        return grant
+
+    def revoke_elevation(self, grant_id: str, *, reason: str) -> ElevationGrant:
+        """Manual early return-to-baseline, before the grant's own TTL
+        would have expired it anyway."""
+        grant = self._policy_engine.elevation.revoke(grant_id, reason=reason)
+        record = self._registry.get(grant.agent_id)
+        self._log(
+            agent_id=grant.agent_id,
+            role=record.role,
+            action="elevation:revoke",
+            decision="action",
+            reason=f"{reason} (grant_id={grant_id!r}, tool={grant.scope.tool!r})",
+            resource_id=None,
+            request_jti=None,
+        )
+        return grant
 
     # ------------------------------------------------------------------
     def _log(

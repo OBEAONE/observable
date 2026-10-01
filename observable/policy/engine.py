@@ -30,7 +30,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from observable.pki.interface import CertificateAuthority, CertificateStatus, CertificateTier
 from observable.pki.validate import CertificateValidationError, validate_chain
 from observable.policy.bundle import PolicyBundle, Sensitivity
-from observable.tokens.scope import Scope
+from observable.policy.elevation import ElevationStore
+from observable.policy.ratelimit import RateLimiter
+from observable.tokens.scope import InvalidScopeError, Scope
 
 TIER_ORDER: dict[CertificateTier, int] = {
     CertificateTier.FOUNDATION: 0,
@@ -57,6 +59,7 @@ class ActionContext:
     timestamp: dt.datetime
     risk_score: float = 0.0
     resource_id: Optional[str] = None
+    agent_id: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -87,14 +90,34 @@ class PolicyEngine:
         ca: CertificateAuthority,
         bundle: Optional[PolicyBundle] = None,
         business_hours_check=_default_is_business_hours,
+        elevation: Optional[ElevationStore] = None,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self._ca = ca
         self._business_hours_check = business_hours_check
         self._bundle: Optional[PolicyBundle] = None
         self._bundle_hash: Optional[str] = None
         self._bundle_signed: bool = False
+        self._elevation = elevation if elevation is not None else ElevationStore()
+        self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
         if bundle is not None:
             self.load_unsigned_bundle(bundle)
+
+    @property
+    def elevation(self) -> ElevationStore:
+        """The engine's just-in-time elevation store (§4b) — owned here
+        (always present, never None) rather than by the caller, so
+        ``authorize_scopes``/``authorize_action`` can always consult it
+        without a None-check at every call site, and so Agent Guard's
+        ``grant_elevation``/``revoke_elevation`` write to the exact same
+        store this engine reads from."""
+        return self._elevation
+
+    @property
+    def rate_limiter(self) -> RateLimiter:
+        """The engine's call-rate counter (§9.9) — always present, same
+        reasoning as ``elevation`` above."""
+        return self._rate_limiter
 
     @classmethod
     def with_signed_bundle(
@@ -175,20 +198,41 @@ class PolicyEngine:
     # Block 3's ScopeAuthorizer protocol
     # ------------------------------------------------------------------
     def authorize_scopes(
-        self, *, role: str, tier: CertificateTier, requested: list[Scope]
+        self,
+        *,
+        role: str,
+        tier: CertificateTier,
+        requested: list[Scope],
+        agent_id: Optional[str] = None,
+        now: Optional[dt.datetime] = None,
     ) -> list[Scope]:
+        now = now or dt.datetime.now(dt.timezone.utc)
         granted: list[Scope] = []
         for scope in requested:
             tool = self._bundle.tools.get(scope.tool)
             if tool is None:
-                continue  # unregistered tool: never granted, deny-by-default
-            if not self._bundle.resolve_role(role, scope.tool):
-                continue
+                continue  # unregistered tool: never granted, deny-by-default -- elevation can't create a tool
             if tool.min_tier is not None:
                 required = CertificateTier(tool.min_tier)
                 if TIER_ORDER[tier] < TIER_ORDER[required]:
-                    continue
-            granted.append(scope)
+                    continue  # tier floor applies equally to a static role grant and an elevated one
+            try:
+                scope.resource_allowlist()  # validate the constraint parses, fail closed if not
+                scope.rate_limit()
+            except InvalidScopeError:
+                continue  # malformed constraint: never minted into a token, same as an unregistered tool
+            if self._bundle.resolve_role(role, scope.tool):
+                granted.append(scope)
+                continue
+            # The static role doesn't carry this tool -- fall back to an
+            # active just-in-time elevation grant (§4b) for this specific
+            # agent, if one covers it. Mint exactly the grant's own scope
+            # (never the raw request) so an elevation can only ever narrow
+            # what's minted, never be used to ask for more than what was
+            # actually approved.
+            elevated = self._elevation.grant_for_token(agent_id=agent_id, tool=scope.tool, now=now)
+            if elevated is not None:
+                granted.append(elevated.scope)
         return granted
 
     # ------------------------------------------------------------------
@@ -201,7 +245,23 @@ class PolicyEngine:
         if tool is None:
             return Decision(allowed=False, reason=f"tool {scope.tool!r} is not registered")
         if not self._bundle.resolve_role(role, scope.tool):
-            return Decision(allowed=False, reason=f"role {role!r} has no grant for {scope.tool!r}")
+            # Continuous re-check, same spirit as the revocation/business-
+            # hours checks below: a token minted (possibly via elevation)
+            # when the grant was active can still be denied here the
+            # instant that grant expires or is revoked -- no separate
+            # invalidation step needed, this is simply re-evaluated fresh
+            # on every single call. Deliberately resource-agnostic here:
+            # ``scope`` is exactly what ``authorize_scopes`` minted (the
+            # elevation's own scope, verbatim), so any resource
+            # restriction is already baked into it and is enforced once,
+            # below, by the same resource_allowlist check every scope
+            # goes through -- not duplicated here with a less specific
+            # denial reason.
+            still_elevated = self._elevation.grant_for_token(
+                agent_id=context.agent_id, tool=scope.tool, now=context.timestamp
+            )
+            if still_elevated is None:
+                return Decision(allowed=False, reason=f"role {role!r} has no grant for {scope.tool!r}")
         if tool.min_tier is not None:
             required = CertificateTier(tool.min_tier)
             if TIER_ORDER[tier] < TIER_ORDER[required]:
@@ -221,6 +281,68 @@ class PolicyEngine:
                     f"{tool.max_risk_score:.2f} for tool {scope.tool!r}"
                 ),
             )
+        # Resource-scoped grants (Least Agency's "which resource", not just
+        # "which tool") -- a scope minted with e.g. "resource=A-1,A-2" only
+        # authorizes this tool against those specific resource_ids, not
+        # every record the tool could otherwise reach.
+        try:
+            allowlist = scope.resource_allowlist()
+        except InvalidScopeError as exc:
+            # Shouldn't happen for a scope that made it through
+            # authorize_scopes (which already validates this), but a
+            # directly-constructed Scope (tests, a future caller) fails
+            # closed here rather than being silently treated as unrestricted.
+            return Decision(allowed=False, reason=f"malformed scope constraint: {exc}")
+        if allowlist is not None:
+            if context.resource_id is None:
+                return Decision(
+                    allowed=False,
+                    reason=(
+                        f"tool {scope.tool!r} grant is resource-scoped "
+                        f"({sorted(allowlist)}) but no resource_id was given"
+                    ),
+                )
+            if context.resource_id not in allowlist:
+                return Decision(
+                    allowed=False,
+                    reason=(
+                        f"resource {context.resource_id!r} is not in tool {scope.tool!r}'s "
+                        f"granted resource set ({sorted(allowlist)})"
+                    ),
+                )
+        # Call-rate limit (Least Agency's "how often", §9.9) -- checked
+        # last, after every other check has already passed, so a call
+        # that would be denied anyway (wrong tier, outside business
+        # hours, resource not covered, ...) never consumes rate budget.
+        # This is also the one check in this method that mutates state:
+        # an admitted call is recorded here, atomically, as part of the
+        # same decision that allows it.
+        try:
+            rate = scope.rate_limit()
+        except InvalidScopeError as exc:
+            return Decision(allowed=False, reason=f"malformed scope constraint: {exc}")
+        if rate is not None:
+            limit, window = rate
+            if context.agent_id is None:
+                return Decision(
+                    allowed=False,
+                    reason=(
+                        f"tool {scope.tool!r} grant is rate-limited ({limit}/{window}) "
+                        "but no agent_id was given"
+                    ),
+                )
+            rate_decision = self._rate_limiter.check_and_record(
+                agent_id=context.agent_id, tool=scope.tool, limit=limit, window=window, now=context.timestamp
+            )
+            if not rate_decision.allowed:
+                return Decision(
+                    allowed=False,
+                    reason=(
+                        f"rate limit exceeded for tool {scope.tool!r}: "
+                        f"{rate_decision.count_in_window}/{limit} calls within {window} "
+                        f"(retry after {rate_decision.retry_after})"
+                    ),
+                )
         return Decision(allowed=True, reason="authorized")
 
     def tool_sensitivity(self, tool_name: str) -> Optional[Sensitivity]:
@@ -235,6 +357,19 @@ class PolicyEngine:
         actually registered, never a copy that can drift."""
         tool = self._bundle.tools.get(tool_name)
         return tool.description if tool else None
+
+    def tool_sandbox_limits(self, tool_name: str) -> tuple[Optional[float], Optional[int]]:
+        """``(max_execution_seconds, max_result_bytes)`` overrides
+        registered for this tool (§9.10), or ``(None, None)`` if the
+        tool carries no override, or isn't registered at all. Read by
+        Agent Guard before each sandboxed invocation; a ``None`` in
+        either slot means the caller's own configured default applies,
+        the same convention ``min_tier=None`` already uses for "no
+        tool-specific override."""
+        tool = self._bundle.tools.get(tool_name)
+        if tool is None:
+            return None, None
+        return tool.max_execution_seconds, tool.max_result_bytes
 
     def registered_tools(self) -> dict:
         """Read-only view of the currently loaded bundle's tool

@@ -76,11 +76,15 @@ class ScopeAuthorizer(Protocol):
     satisfying this Protocol works, including a stub in tests."""
 
     def authorize_scopes(
-        self, *, role: str, tier: CertificateTier, requested: list[Scope]
+        self, *, role: str, tier: CertificateTier, requested: list[Scope], agent_id: str
     ) -> list[Scope]:
         """Return the subset of ``requested`` scopes this role/tier is
         granted. An empty return means deny-by-default: nothing was
-        explicitly granted."""
+        explicitly granted. ``agent_id`` lets the authorizer additionally
+        check for a per-agent just-in-time elevation grant (§4b) covering
+        a tool the role alone wouldn't authorize — static RBAC and
+        elevation share this one entry point rather than being two
+        separate checks callers have to remember to make."""
         ...
 
 
@@ -166,7 +170,7 @@ class TokenService:
 
         parsed_requested = [Scope.parse(s) for s in requested_scopes]
         granted = self._authorizer.authorize_scopes(
-            role=identity.role, tier=identity.tier, requested=parsed_requested
+            role=identity.role, tier=identity.tier, requested=parsed_requested, agent_id=identity.agent_id
         )
         if not granted:
             raise ScopeDeniedError(

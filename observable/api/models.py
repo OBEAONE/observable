@@ -204,6 +204,37 @@ class RiskHistoryResponse(BaseModel):
     agents: list[AgentRiskHistoryResponse]
 
 
+class ElevationGrantRequest(BaseModel):
+    agent_id: str
+    tool: str
+    resource_ids: Optional[list[str]] = None
+    reason: str
+    granted_by: str
+    ttl_seconds: int = Field(description="how long the grant stays active, in seconds, before it auto-expires")
+
+
+class ElevationRevokeRequest(BaseModel):
+    reason: str
+
+
+class ElevationGrantResponse(BaseModel):
+    grant_id: str
+    agent_id: str
+    tool: str
+    resource_ids: Optional[list[str]] = None
+    reason: str
+    granted_by: str
+    granted_at: str
+    expires_at: str
+    revoked_at: Optional[str] = None
+    revoked_reason: Optional[str] = None
+    status: str = Field(description="active | expired | revoked, evaluated as of the response time")
+
+
+class ElevationListResponse(BaseModel):
+    grants: list[ElevationGrantResponse]
+
+
 class ControlResultResponse(BaseModel):
     control_id: str
     title: str

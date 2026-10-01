@@ -11,6 +11,9 @@ Exposes the Agent Guard core over HTTP. Endpoints:
   POST /gateway/invoke      the one door every tool call goes through
   POST /admin/contain       automated/operator containment (suspend)
   POST /admin/reinstate     lift a suspension
+  POST /admin/elevation/grant         grant a time-boxed, just-in-time permission
+  POST /admin/elevation/{id}/revoke   revoke one early, before it would expire
+  GET  /admin/elevation               list elevation grants (optionally by agent_id)
   GET  /audit/verify        tamper-evidence check over the whole chain
   GET  /audit/{agent_id}    an agent's own audit trail
   GET  /agents              list all enrolled agents
@@ -31,6 +34,7 @@ import binascii
 import dataclasses
 import datetime as dt
 from pathlib import Path
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +55,10 @@ from observable.api.models import (
     ControlResultResponse,
     DetectionThresholdRequest,
     DriftResponse,
+    ElevationGrantRequest,
+    ElevationGrantResponse,
+    ElevationListResponse,
+    ElevationRevokeRequest,
     EnrollRequest,
     EnrollResponse,
     ImpactEntryRequest,
@@ -87,6 +95,7 @@ from observable.identity.registry import (
 from observable.inventory.posture import scan_drift, scan_snapshot
 from observable.inventory.shadow import detect_shadow_agents
 from observable.pki.interface import AttestationEvidence, CertificateTier
+from observable.policy.elevation import ElevationError, ElevationGrant, ElevationNotFoundError
 from observable.pki.reference_ca import AttestationRequiredError
 from observable.tokens.service import AgentNotActiveError, ScopeDeniedError, TokenError
 
@@ -362,6 +371,70 @@ def admin_reinstate(body: ContainRequest, state: AppState = Depends(get_state)) 
     except (UnknownAgentError, AgentAlreadyRevokedError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"agent_id": record.agent_id, "status": record.status.value}
+
+
+# ----------------------------------------------------------------------
+# Just-in-time privilege elevation (§4b / §9.8) -- dynamic privilege
+# scoping: grant one agent one tool it wouldn't otherwise have, for a
+# bounded time, with no separate step to revert it -- it just stops
+# working once expired or explicitly revoked.
+# ----------------------------------------------------------------------
+def _elevation_response(grant: ElevationGrant, *, now: dt.datetime) -> ElevationGrantResponse:
+    allowlist = grant.scope.resource_allowlist()
+    return ElevationGrantResponse(
+        grant_id=grant.grant_id,
+        agent_id=grant.agent_id,
+        tool=grant.scope.tool,
+        resource_ids=sorted(allowlist) if allowlist is not None else None,
+        reason=grant.reason,
+        granted_by=grant.granted_by,
+        granted_at=grant.granted_at.isoformat(),
+        expires_at=grant.expires_at.isoformat(),
+        revoked_at=grant.revoked_at.isoformat() if grant.revoked_at else None,
+        revoked_reason=grant.revoked_reason,
+        status=grant.status(now),
+    )
+
+
+@app.post("/admin/elevation/grant", response_model=ElevationGrantResponse)
+def admin_grant_elevation(
+    body: ElevationGrantRequest, state: AppState = Depends(get_state)
+) -> ElevationGrantResponse:
+    try:
+        grant = state.guard.grant_elevation(
+            agent_id=body.agent_id,
+            tool=body.tool,
+            resource_ids=body.resource_ids,
+            reason=body.reason,
+            granted_by=body.granted_by,
+            ttl=dt.timedelta(seconds=body.ttl_seconds),
+        )
+    except UnknownAgentError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, ElevationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _elevation_response(grant, now=dt.datetime.now(dt.timezone.utc))
+
+
+@app.post("/admin/elevation/{grant_id}/revoke", response_model=ElevationGrantResponse)
+def admin_revoke_elevation(
+    grant_id: str, body: ElevationRevokeRequest, state: AppState = Depends(get_state)
+) -> ElevationGrantResponse:
+    try:
+        grant = state.guard.revoke_elevation(grant_id, reason=body.reason)
+    except ElevationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _elevation_response(grant, now=dt.datetime.now(dt.timezone.utc))
+
+
+@app.get("/admin/elevation", response_model=ElevationListResponse)
+def admin_list_elevations(
+    agent_id: Optional[str] = None, state: AppState = Depends(get_state)
+) -> ElevationListResponse:
+    now = dt.datetime.now(dt.timezone.utc)
+    store = state.guard.elevation
+    grants = store.for_agent(agent_id) if agent_id else store.all_grants()
+    return ElevationListResponse(grants=[_elevation_response(g, now=now) for g in grants])
 
 
 # ----------------------------------------------------------------------

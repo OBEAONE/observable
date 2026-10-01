@@ -42,6 +42,10 @@ class ToolDefinition:
     business_hours_only: bool = False
     max_risk_score: float = 1.0  # requests with a higher risk_score are denied
     min_tier: Optional[str] = None  # e.g. "enterprise" — None means any tier
+    # Execution sandbox overrides (§9.10) — None means "use Agent Guard's
+    # configured default," same meaning as min_tier's None.
+    max_execution_seconds: Optional[float] = None
+    max_result_bytes: Optional[int] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -78,6 +82,8 @@ class PolicyBundle:
                     "business_hours_only": t.business_hours_only,
                     "max_risk_score": t.max_risk_score,
                     "min_tier": t.min_tier,
+                    "max_execution_seconds": t.max_execution_seconds,
+                    "max_result_bytes": t.max_result_bytes,
                 }
                 for name, t in sorted(self.tools.items())
             },

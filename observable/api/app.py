@@ -3,6 +3,11 @@ Block 6 — FastAPI application.
 
 Exposes the Agent Guard core over HTTP. Endpoints:
 
+  POST /accounts/setup     one-time human-operator account bootstrap (§9.11)
+  GET  /login               the operator sign-in page (password + 2FA)
+  POST /login/password      step 1: password, issues a pending-MFA cookie
+  POST /login/verify        step 2: TOTP code, issues a session cookie
+  POST /logout              clear the operator's session
   POST /enroll             one-time agent enrollment (operator-approved
                             out of band in a real deployment; unauthenticated
                             here for the reference implementation — see
@@ -38,9 +43,13 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
+from observable.accounts.store import AccountAlreadyExistsError
+from observable.accounts.totp import provisioning_uri
 from observable.api.models import (
+    AccountSetupRequest,
+    AccountSetupResponse,
     AgentIdentityResponse,
     AgentRiskHistoryResponse,
     AgentStatusResponse,
@@ -67,6 +76,10 @@ from observable.api.models import (
     ImpactStatusUpdateRequest,
     InvokeRequest,
     InvokeResponse,
+    LoginPasswordRequest,
+    LoginPasswordResponse,
+    LoginVerifyRequest,
+    LoginVerifyResponse,
     PostureFindingResponse,
     RiskHistoryResponse,
     ScanRequest,
@@ -77,7 +90,7 @@ from observable.api.models import (
     TokenResponse,
 )
 from observable.api.pop import SignatureVerificationError, verify_request_signature
-from observable.api.state import AppState, build_default_state
+from observable.api.state import PENDING_MFA_TTL, SESSION_TTL, AppState, build_default_state
 from observable.compliance.framework import ComplianceContext
 from observable.compliance.impact_register import ImpactRegisterError
 from observable.compliance.nist_ai_rmf import NIST_AI_RMF_CONTROLS
@@ -132,6 +145,9 @@ def get_state() -> AppState:
 # ----------------------------------------------------------------------
 _CONSOLE_HTML_PATH = Path(__file__).parent / "static" / "console.html"
 _LANDING_HTML_PATH = Path(__file__).parent / "static" / "landing.html"
+_LOGIN_HTML_PATH = Path(__file__).parent / "static" / "login.html"
+_SESSION_COOKIE = "observable_session"
+_PENDING_MFA_COOKIE = "observable_mfa"
 _ICONS_DIR = Path(__file__).parent / "static" / "icons"
 _ICON_MEDIA_TYPES = {
     "favicon.ico": "image/x-icon",
@@ -159,8 +175,17 @@ def icon_asset(filename: str) -> Response:
     return Response(content=data, media_type=media_type)
 
 
-@app.get("/console", response_class=HTMLResponse)
-def console_page() -> HTMLResponse:
+@app.get("/console")
+def console_page(request: Request, state: AppState = Depends(get_state)) -> Response:
+    # Human-operator gate (§9.11) -- entirely separate from the PoP/JWT
+    # scheme every AI-agent request above goes through. No valid,
+    # unexpired session cookie: bounce to /login rather than serving the
+    # dashboard, which used to be reachable by anyone who found the URL.
+    session_token = request.cookies.get(_SESSION_COOKIE)
+    session = state.sessions.get(session_token) if session_token else None
+    if session is None:
+        return RedirectResponse(url="/login", status_code=303)
+
     raw = _CONSOLE_HTML_PATH.read_text(encoding="utf-8")
     # The file itself is just a <title>/<style>/body-markup/<script>
     # fragment (no <!doctype>/<html>/<head> of its own); browsers hoist
@@ -191,6 +216,97 @@ def console_page() -> HTMLResponse:
 def landing_page() -> HTMLResponse:
     raw = _LANDING_HTML_PATH.read_text(encoding="utf-8")
     return HTMLResponse(content=raw)
+
+
+# ----------------------------------------------------------------------
+# Human-operator login (§9.11): password, then a TOTP 2FA code, before
+# the console above is reachable at all. Entirely separate from the
+# AI-agent identity system (PKI certs, PoP tokens) the rest of this file
+# implements -- this is who may *view* the console, not who may call the
+# Gateway. Single-operator reference scope: /accounts/setup creates the
+# one operator account this deployment will ever have, and only works
+# once (see observable.accounts.store's module docstring).
+# ----------------------------------------------------------------------
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+def login_page() -> HTMLResponse:
+    raw = _LOGIN_HTML_PATH.read_text(encoding="utf-8")
+    return HTMLResponse(content=raw)
+
+
+@app.post("/accounts/setup", response_model=AccountSetupResponse)
+def accounts_setup(body: AccountSetupRequest, state: AppState = Depends(get_state)) -> AccountSetupResponse:
+    try:
+        account = state.accounts.create(username=body.username, password=body.password)
+    except AccountAlreadyExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    uri = provisioning_uri(account.totp_secret, account_name=account.username)
+    return AccountSetupResponse(username=account.username, totp_secret=account.totp_secret, provisioning_uri=uri)
+
+
+@app.post("/login/password", response_model=LoginPasswordResponse)
+def login_password(
+    body: LoginPasswordRequest, request: Request, response: Response, state: AppState = Depends(get_state)
+) -> LoginPasswordResponse:
+    now = dt.datetime.now(dt.timezone.utc)
+    # Reuses the same sliding-window RateLimiter built for per-agent
+    # tool-call throttling (§9.9) -- here keyed by username instead of
+    # agent_id, "login" instead of a tool name, to throttle brute-force
+    # password/code guessing the same way a runaway agent is throttled.
+    decision = state.login_rate_limiter.check_and_record(
+        agent_id=f"login:{body.username}", tool="login", limit=5, window=dt.timedelta(minutes=15), now=now
+    )
+    if not decision.allowed:
+        raise HTTPException(status_code=429, detail="too many login attempts; try again later")
+    if not state.accounts.verify_password(body.username, body.password):
+        raise HTTPException(status_code=401, detail="invalid username or password")
+
+    pending_token = state.pending_mfa.issue({"username": body.username}, now=now)
+    response.set_cookie(
+        _PENDING_MFA_COOKIE,
+        pending_token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=int(PENDING_MFA_TTL.total_seconds()),
+    )
+    return LoginPasswordResponse(mfa_required=True)
+
+
+@app.post("/login/verify", response_model=LoginVerifyResponse)
+def login_verify(
+    body: LoginVerifyRequest, request: Request, response: Response, state: AppState = Depends(get_state)
+) -> LoginVerifyResponse:
+    now = dt.datetime.now(dt.timezone.utc)
+    pending_token = request.cookies.get(_PENDING_MFA_COOKIE)
+    pending = state.pending_mfa.get(pending_token, now=now) if pending_token else None
+    if pending is None:
+        raise HTTPException(status_code=401, detail="no pending login; start again at /login")
+    username = pending["username"]
+
+    if not state.accounts.verify_totp(username, body.code, now=now):
+        raise HTTPException(status_code=401, detail="invalid or expired code")
+
+    state.pending_mfa.revoke(pending_token)
+    session_token = state.sessions.issue({"username": username}, now=now)
+    response.set_cookie(
+        _SESSION_COOKIE,
+        session_token,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        max_age=int(SESSION_TTL.total_seconds()),
+    )
+    response.delete_cookie(_PENDING_MFA_COOKIE)
+    return LoginVerifyResponse(ok=True, username=username)
+
+
+@app.post("/logout")
+def logout(request: Request, response: Response, state: AppState = Depends(get_state)) -> dict:
+    session_token = request.cookies.get(_SESSION_COOKIE)
+    if session_token:
+        state.sessions.revoke(session_token)
+    response.delete_cookie(_SESSION_COOKIE)
+    return {"ok": True}
 
 
 @dataclasses.dataclass(frozen=True)

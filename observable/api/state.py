@@ -9,7 +9,10 @@ policy-admins publish it — the rest of the wiring is unchanged.
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 
+from observable.accounts.session import TokenStore
+from observable.accounts.store import AccountStore
 from observable.api.pop import NonceCache
 from observable.compliance.impact_register import ImpactRegister, seed_reflexive_governance_entries
 from observable.detection.engine import DetectionEngine
@@ -22,7 +25,14 @@ from observable.inventory.store import InventoryStore
 from observable.pki.reference_ca import ReferenceCA
 from observable.policy.bundle import default_bundle
 from observable.policy.engine import PolicyEngine
+from observable.policy.ratelimit import RateLimiter
 from observable.tokens.service import TokenService
+
+# Login flow timing (§9.11) -- a pending-MFA token only needs to survive
+# the few seconds between entering a password and entering a 2FA code;
+# a session lasts a working day before an operator has to log in again.
+PENDING_MFA_TTL = dt.timedelta(minutes=5)
+SESSION_TTL = dt.timedelta(hours=12)
 
 
 @dataclasses.dataclass
@@ -37,6 +47,13 @@ class AppState:
     connectors: dict[str, SaaSConnector]
     detection: DetectionEngine
     impact_register: ImpactRegister
+    # Human-operator login (§9.11) -- entirely separate from the AI-agent
+    # identity system above (registry/token_service/guard): this is who
+    # may view the console, not who may call the Gateway.
+    accounts: AccountStore
+    pending_mfa: TokenStore
+    sessions: TokenStore
+    login_rate_limiter: RateLimiter
 
     def run_scan(self, connector_id: str | None = None):
         """Run one or all registered connectors and ingest the
@@ -185,4 +202,8 @@ def build_default_state() -> AppState:
         connectors={default_connector.connector_id: default_connector},
         detection=detection,
         impact_register=impact_register,
+        accounts=AccountStore(),
+        pending_mfa=TokenStore(default_ttl=PENDING_MFA_TTL),
+        sessions=TokenStore(default_ttl=SESSION_TTL),
+        login_rate_limiter=RateLimiter(),
     )

@@ -15,6 +15,25 @@ def client():
     app.dependency_overrides.clear()
 
 
+def _login_as_new_operator(client, username: str, password: str) -> None:
+    """Runs the full §9.11 bootstrap + two-step login through the real
+    HTTP endpoints (setup -> password -> TOTP) and leaves the client
+    holding a valid session cookie, for tests that just need to be
+    logged in to reach /console."""
+    from observable.accounts.totp import totp_now
+
+    setup = client.post("/accounts/setup", json={"username": username, "password": password})
+    assert setup.status_code == 200, setup.text
+    secret = setup.json()["totp_secret"]
+
+    step1 = client.post("/login/password", json={"username": username, "password": password})
+    assert step1.status_code == 200, step1.text
+
+    code = totp_now(secret)
+    step2 = client.post("/login/verify", json={"code": code})
+    assert step2.status_code == 200, step2.text
+
+
 def test_enroll_token_invoke_round_trip(client):
     agent = AgentClient.enroll(
         http=client,
@@ -166,7 +185,16 @@ def test_agent_identity_endpoint_unknown_agent_404s(client):
     assert resp.status_code == 404
 
 
-def test_console_page_served_same_origin(client):
+def test_console_without_a_session_redirects_to_login(client):
+    # §9.11: the console used to be reachable by anyone who found the
+    # URL; it's now gated behind operator login.
+    resp = client.get("/console", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+
+
+def test_console_page_served_same_origin_once_logged_in(client):
+    _login_as_new_operator(client, "omar", "correct horse battery staple")
     resp = client.get("/console")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")

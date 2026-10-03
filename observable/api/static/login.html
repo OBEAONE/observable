@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Observable</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #D81E24;
+    --ink: #0B0F17;
+    --paper: #F7F8FA;
+    --line: rgba(11,15,23,0.10);
+    --muted: #5B6472;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  code, .mono { font-family: "IBM Plex Mono", monospace; }
+  .card {
+    width: 100%;
+    max-width: 380px;
+    margin: 24px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 32px 28px;
+    box-shadow: 0 1px 2px rgba(11,15,23,0.04);
+  }
+  .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: inherit;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    width: 100%;
+    margin-top: 22px;
+    padding: 11px 14px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .error {
+    margin-top: 14px;
+    font-size: 13.5px;
+    color: var(--accent);
+    display: none;
+  }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  #step-code { display: none; }
+  .back { margin-top: 14px; font-size: 13px; color: var(--muted); text-align: center; }
+  .back a { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <p class="brand">Observable</p>
+    <p class="sub">Sign in to the console</p>
+
+    <form id="step-password" autocomplete="on">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Continue</button>
+    </form>
+
+    <form id="step-code" autocomplete="off">
+      <label for="code">6-digit code</label>
+      <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" required>
+      <p class="hint">From your authenticator app.</p>
+      <button type="submit">Sign in</button>
+    </form>
+
+    <p class="error" id="error"></p>
+    <p class="back"><a href="/">&larr; Back to observable24.com</a></p>
+  </div>
+
+<script>
+(function () {
+  var passwordForm = document.getElementById('step-password');
+  var codeForm = document.getElementById('step-code');
+  var errorEl = document.getElementById('error');
+
+  function showError(message) {
+    errorEl.textContent = message;
+    errorEl.style.display = 'block';
+  }
+
+  function clearError() {
+    errorEl.style.display = 'none';
+  }
+
+  passwordForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    clearError();
+    var username = document.getElementById('username').value;
+    var password = document.getElementById('password').value;
+    fetch('/login/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username: username, password: password }),
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (body) {
+          throw new Error(body.detail || 'Invalid username or password.');
+        });
+      }
+      passwordForm.style.display = 'none';
+      codeForm.style.display = 'block';
+      document.getElementById('code').focus();
+    }).catch(function (err) {
+      showError(err.message || 'Invalid username or password.');
+    });
+  });
+
+  codeForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    clearError();
+    var code = document.getElementById('code').value;
+    fetch('/login/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ code: code }),
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().then(function (body) {
+          throw new Error(body.detail || 'Invalid or expired code.');
+        });
+      }
+      window.location.href = '/console';
+    }).catch(function (err) {
+      showError(err.message || 'Invalid or expired code.');
+    });
+  });
+})();
+</script>
+</body>
+</html>

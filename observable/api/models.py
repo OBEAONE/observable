@@ -305,6 +305,35 @@ class SoarIncidentResponse(BaseModel):
     closed_reason: Optional[str] = None
 
 
+class AccountSetupRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AccountSetupResponse(BaseModel):
+    username: str
+    totp_secret: str
+    provisioning_uri: str
+
+
+class LoginPasswordRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginPasswordResponse(BaseModel):
+    mfa_required: bool = True
+
+
+class LoginVerifyRequest(BaseModel):
+    code: str
+
+
+class LoginVerifyResponse(BaseModel):
+    ok: bool = True
+    username: str
+
+
 class DriftResponse(BaseModel):
     connector_id: str
     old_taken_at: str

@@ -1207,6 +1207,84 @@ are set at `AgentGuard` construction and per-tool in the policy bundle,
 not changeable through `POST`/`GET` endpoints the way containment and
 elevation are.
 
+## 9.11 Operator console authentication (v1.11)
+
+Not a guide control — §5 maps Zero Trust capabilities for *AI agents*,
+and this is a human-facing gap in the platform itself: `/console` was a
+read-only dashboard served with no authentication at all. Anyone who
+found the URL could view agent inventory, compliance status, and audit
+history. v1.11 closes that with a small, deliberately separate identity
+system for the humans operating Observable, under `observable/accounts/`
+— distinct from, and never cross-checked against, the PKI/PoP identity
+system the rest of this document specifies for AI agents. An operator
+account proves a human may view the console; an agent certificate proves
+an AI agent may call the Gateway. They answer different questions and
+are not meant to be unified.
+
+**Two factors, both required, reusing primitives already built for the
+agent side where the shape matched exactly:**
+- **Password** — PBKDF2-HMAC-SHA256 (`observable/accounts/passwords.py`),
+  390,000 iterations (OWASP's 2023 minimum), random 16-byte salt per
+  password, constant-time comparison. Stdlib-only, like the rest of this
+  reference's cryptographic primitives — no new dependency for a
+  well-specified, NIST-recommended KDF.
+- **TOTP (RFC 6238)** — `observable/accounts/totp.py`, also stdlib-only
+  (HMAC-SHA1 over a 30-second time counter, same reasoning as the
+  password hashing: a small, standard primitive doesn't need a new
+  third-party dependency). Interoperable with any standard authenticator
+  app via the `otpauth://` provisioning URI returned once at setup.
+
+**Login is two HTTP round-trips, matching how authenticator apps are
+actually used:**
+1. `POST /login/password` — checked against a sliding-window
+   `RateLimiter` *before* the password itself is checked, keyed by
+   username rather than `(agent_id, tool)` — the exact same class
+   §9.9 built for per-agent tool-call throttling, reused here to
+   throttle brute-force login guessing instead of a runaway agent. On
+   success, issues a short-lived (5 min) "pending MFA" token as an
+   `HttpOnly` cookie — proof the password step passed, nothing more.
+2. `POST /login/verify` — the pending-MFA cookie plus a TOTP code;
+   on success, issues a 12-hour session token as a second `HttpOnly`
+   cookie and revokes the pending one. `GET /console` now requires a
+   live, unexpired session cookie (`observable.accounts.session.TokenStore`)
+   or redirects to `/login` — the dashboard is simply unreachable
+   without having passed both factors.
+
+**Bootstrap, single-operator reference scope.** There is no open
+registration endpoint. `POST /accounts/setup` creates the one operator
+account this deployment will ever have, returns the TOTP secret and
+provisioning URI *once*, and then permanently refuses (`409`) — "first
+operator becomes the operator," the same bootstrap pattern many
+single-tenant admin tools use, rather than a multi-account system this
+reference scope doesn't need yet.
+
+**Fail-closed details worth naming explicitly:** a nonexistent username
+still runs a password-hash comparison against a throwaway value (so a
+missing account isn't measurably faster to reject than a wrong password
+for a real one); a wrong TOTP code doesn't burn or reissue the pending
+login, so a mistyped code can simply be retried within the same 5-minute
+window; every store here (`AccountStore`, the pending-MFA and session
+`TokenStore`s, the login `RateLimiter`) is in-memory and process-local,
+the same durability tradeoff — and the same "resets to empty is the safe
+failure direction" — already made for the Elevation Store and the
+per-agent Rate Limiter.
+
+### What v1.11 does *not* do
+
+Single operator only — no multi-account roles, no invitation flow, no
+per-operator audit attribution (console views aren't logged the way
+agent tool calls are). No password reset or account-recovery flow — a
+lost password or a lost authenticator app has no self-service path in
+this reference scope; the only way back in is restarting the process
+(which clears the in-memory `AccountStore` and allows `/accounts/setup`
+to run again). No backup/recovery codes for 2FA. No account lockout
+beyond the sliding-window login throttle (an attacker who waits out the
+window can keep guessing indefinitely, just slowly). No CSRF protection
+on the login endpoints — acceptable for a JSON API called by same-origin
+`fetch()` with `SameSite=Lax` cookies, but a production deployment
+embedding this in a larger application should review that assumption.
+No hardware-key (WebAuthn/FIDO2) second-factor option — TOTP only.
+
 ---
 
 ## 10. Directory layout (code delivered with this document)
@@ -1230,6 +1308,9 @@ observable/
                   §9.5 — NIST AI RMF control set + Impact Register
                   (nist_ai_rmf.py, impact_register.py)
   export/         §9.2-9.3 — CEF/JSON SIEM export, SOAR incident export
+  accounts/       §9.11 — human-operator accounts, password hashing (RFC-free,
+                  stdlib PBKDF2), TOTP 2FA (RFC 6238), session/pending-MFA
+                  token stores — separate from the AI-agent identity system
   tests/          pytest suite, one file per block
   demo.py                    Scripted walkthrough of §6 (Agent Guard)
   inventory_demo.py          Scripted walkthrough of §7 (Inventory & Posture)
